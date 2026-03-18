@@ -36,8 +36,8 @@ export default function UploadPlanilhaPage() {
       }
 
       setMensagem(
-        `Upload concluído com sucesso. Arquivo: ${dados.nomeArquivo}`
-      );
+        `Upload concluído com sucesso. Arquivo: ${dados.nomeArquivo}. Total: ${dados.lote.quantidadeLinhasPlanilha}, válidas: ${dados.lote.quantidadeLinhasValidas}, inválidas: ${dados.lote.quantidadeLinhasInvalidas}`
+);
       setLoteId("");
       setArquivo(null);
     } catch (error) {
