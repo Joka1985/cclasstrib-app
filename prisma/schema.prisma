@@ -1,0 +1,65 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TipoPessoa {
+  PF
+  PJ
+}
+
+enum StatusLote {
+  CADASTRO_PENDENTE
+  DOCUMENTACAO_PENDENTE
+  AGUARDANDO_VALIDACAO
+  ORCAMENTO_GERADO
+  AGUARDANDO_PAGAMENTO
+  PAGAMENTO_APROVADO
+  EM_PROCESSAMENTO
+  PROCESSADO_COM_SUCESSO
+  PROCESSADO_COM_DIVERGENCIAS
+  PROCESSADO_COM_REVISAO_HUMANA
+  ERRO_PROCESSAMENTO
+  EMAIL_ENVIADO
+}
+
+model Cliente {
+  id                 String     @id @default(cuid())
+  tipoPessoa         TipoPessoa @map("tipo_pessoa")
+  nomeRazaoSocial    String     @map("nome_razao_social")
+  cpfCnpj            String     @unique @map("cpf_cnpj")
+  atividadePrincipal String     @map("atividade_principal")
+  email              String
+  telefone           String?
+  uf                 String?    @db.VarChar(2)
+  createdAt          DateTime   @default(now()) @map("created_at")
+  updatedAt          DateTime   @updatedAt @map("updated_at")
+
+  lotes              Lote[]
+
+  @@map("clientes")
+}
+
+model Lote {
+  id                        String     @id @default(cuid())
+  clienteId                 String     @map("cliente_id")
+  statusLote                StatusLote @default(DOCUMENTACAO_PENDENTE) @map("status_lote")
+  quantidadeLinhasPlanilha  Int        @default(0) @map("quantidade_linhas_planilha")
+  quantidadeLinhasValidas   Int        @default(0) @map("quantidade_linhas_validas")
+  quantidadeLinhasInvalidas Int        @default(0) @map("quantidade_linhas_invalidas")
+  valorUnitario             Decimal    @default(0) @db.Decimal(10, 2) @map("valor_unitario")
+  valorTotal                Decimal    @default(0) @db.Decimal(12, 2) @map("valor_total")
+  observacoesInternas       String?    @map("observacoes_internas")
+  createdAt                 DateTime   @default(now()) @map("created_at")
+  updatedAt                 DateTime   @updatedAt @map("updated_at")
+
+  cliente                   Cliente    @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+
+  @@index([clienteId])
+  @@index([statusLote])
+  @@map("lotes")
+}
