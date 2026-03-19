@@ -71,9 +71,10 @@ model Lote {
   createdAt                 DateTime   @default(now()) @map("created_at")
   updatedAt                 DateTime   @updatedAt @map("updated_at")
 
-  cliente       Cliente        @relation(fields: [clienteId], references: [id], onDelete: Cascade)
-  itensPlanilha ItemPlanilha[]
-  xmlDocumentos XmlDocumento[]
+  cliente                 Cliente                  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  itensPlanilha           ItemPlanilha[]
+  xmlDocumentos           XmlDocumento[]
+  divergenciasXmlPlanilha DivergenciaXmlPlanilha[]
 
   @@index([clienteId])
   @@index([statusLote])
@@ -119,4 +120,23 @@ model XmlDocumento {
   @@index([loteId])
   @@index([statusXml])
   @@map("xml_documentos")
+}
+
+model DivergenciaXmlPlanilha {
+  id                String   @id @default(cuid())
+  loteId            String   @map("lote_id")
+  codigoPlanilha    String?  @map("codigo_planilha")
+  codigoXml         String?  @map("codigo_xml")
+  descricaoPlanilha String?  @map("descricao_planilha")
+  descricaoXml      String?  @map("descricao_xml")
+  tipoDivergencia   String   @map("tipo_divergencia")
+  observacao        String?  @map("observacao")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  lote Lote @relation(fields: [loteId], references: [id], onDelete: Cascade)
+
+  @@index([loteId])
+  @@index([tipoDivergencia])
+  @@map("divergencias_xml_planilha")
 }
