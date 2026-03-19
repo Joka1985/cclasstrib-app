@@ -11,6 +11,13 @@ function primeiroValor<T>(valor: T | T[] | undefined): T | undefined {
   return valor;
 }
 
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    mensagem: "Rota upload-xml ativa",
+  });
+}
+
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();

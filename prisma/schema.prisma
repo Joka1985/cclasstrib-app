@@ -27,6 +27,20 @@ enum StatusLote {
   EMAIL_ENVIADO
 }
 
+enum TipoDocumentoFiscal {
+  NFE
+  NFCE
+  NFSE
+  OUTRO
+}
+
+enum StatusXml {
+  SAIDA
+  ENTRADA
+  NAO_RELACIONADO
+  INVALIDO
+}
+
 model Cliente {
   id                 String     @id @default(cuid())
   tipoPessoa         TipoPessoa @map("tipo_pessoa")
@@ -59,6 +73,7 @@ model Lote {
 
   cliente       Cliente        @relation(fields: [clienteId], references: [id], onDelete: Cascade)
   itensPlanilha ItemPlanilha[]
+  xmlDocumentos XmlDocumento[]
 
   @@index([clienteId])
   @@index([statusLote])
@@ -83,4 +98,25 @@ model ItemPlanilha {
   @@index([loteId])
   @@index([linhaValida])
   @@map("itens_planilha")
+}
+
+model XmlDocumento {
+  id                  String              @id @default(cuid())
+  loteId              String              @map("lote_id")
+  tipoDocumento       TipoDocumentoFiscal @default(NFE) @map("tipo_documento")
+  chaveDocumento      String?             @map("chave_documento")
+  emitenteCpfCnpj     String              @map("emitente_cpf_cnpj")
+  emitenteNome        String?             @map("emitente_nome")
+  destinatarioCpfCnpj String?             @map("destinatario_cpf_cnpj")
+  destinatarioNome    String?             @map("destinatario_nome")
+  dataEmissao         DateTime?           @map("data_emissao")
+  statusXml           StatusXml           @default(INVALIDO) @map("status_xml")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
+
+  lote Lote @relation(fields: [loteId], references: [id], onDelete: Cascade)
+
+  @@index([loteId])
+  @@index([statusXml])
+  @@map("xml_documentos")
 }
