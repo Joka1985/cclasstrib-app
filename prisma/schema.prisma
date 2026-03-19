@@ -39,7 +39,7 @@ model Cliente {
   createdAt          DateTime   @default(now()) @map("created_at")
   updatedAt          DateTime   @updatedAt @map("updated_at")
 
-  lotes              Lote[]
+  lotes Lote[]
 
   @@map("clientes")
 }
@@ -51,15 +51,36 @@ model Lote {
   quantidadeLinhasPlanilha  Int        @default(0) @map("quantidade_linhas_planilha")
   quantidadeLinhasValidas   Int        @default(0) @map("quantidade_linhas_validas")
   quantidadeLinhasInvalidas Int        @default(0) @map("quantidade_linhas_invalidas")
-  valorUnitario             Decimal    @default(0) @db.Decimal(10, 2) @map("valor_unitario")
-  valorTotal                Decimal    @default(0) @db.Decimal(12, 2) @map("valor_total")
+  valorUnitario             Decimal    @default(0) @map("valor_unitario") @db.Decimal(10, 2)
+  valorTotal                Decimal    @default(0) @map("valor_total") @db.Decimal(12, 2)
   observacoesInternas       String?    @map("observacoes_internas")
   createdAt                 DateTime   @default(now()) @map("created_at")
   updatedAt                 DateTime   @updatedAt @map("updated_at")
 
-  cliente                   Cliente    @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  cliente       Cliente        @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  itensPlanilha ItemPlanilha[]
 
   @@index([clienteId])
   @@index([statusLote])
   @@map("lotes")
+}
+
+model ItemPlanilha {
+  id                     String   @id @default(cuid())
+  loteId                 String   @map("lote_id")
+  linhaOrigem            Int      @map("linha_origem")
+  codigoItemOuServico    String   @map("codigo_item_ou_servico")
+  descricaoItemOuServico String   @map("descricao_item_ou_servico")
+  ncm                    String?
+  nbs                    String?
+  linhaValida            Boolean  @default(false) @map("linha_valida")
+  motivoInvalidade       String?  @map("motivo_invalidade")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  lote Lote @relation(fields: [loteId], references: [id], onDelete: Cascade)
+
+  @@index([loteId])
+  @@index([linhaValida])
+  @@map("itens_planilha")
 }

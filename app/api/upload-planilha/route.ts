@@ -83,7 +83,21 @@ export async function POST(req: NextRequest) {
     let quantidadeLinhasValidas = 0;
     let quantidadeLinhasInvalidas = 0;
 
+    const itensParaSalvar: Array<{
+      linhaOrigem: number;
+      codigoItemOuServico: string;
+      descricaoItemOuServico: string;
+      ncm: string | null;
+      nbs: string | null;
+      linhaValida: boolean;
+      motivoInvalidade: string | null;
+    }> = [];
+
+    let indiceLinha = 1;
+
     for (const linha of linhas) {
+      indiceLinha++;
+
       const codigo = obterCampo(linha, [
         "codigo_item_ou_servico",
         "cod_produto_ou_servico",
@@ -105,13 +119,52 @@ export async function POST(req: NextRequest) {
 
       quantidadeLinhasPlanilha++;
 
-      const linhaValida = Boolean(codigo && descricao && (ncm || nbs));
+      let motivoInvalidade: string | null = null;
+
+      if (!codigo) {
+        motivoInvalidade = "Código não informado";
+      } else if (!descricao) {
+        motivoInvalidade = "Descrição não informada";
+      } else if (!ncm && !nbs) {
+        motivoInvalidade = "NCM ou NBS não informado";
+      }
+
+      const linhaValida = motivoInvalidade === null;
 
       if (linhaValida) {
         quantidadeLinhasValidas++;
       } else {
         quantidadeLinhasInvalidas++;
       }
+
+      itensParaSalvar.push({
+        linhaOrigem: indiceLinha,
+        codigoItemOuServico: codigo,
+        descricaoItemOuServico: descricao,
+        ncm: ncm || null,
+        nbs: nbs || null,
+        linhaValida,
+        motivoInvalidade,
+      });
+    }
+
+    await prisma.itemPlanilha.deleteMany({
+      where: { loteId },
+    });
+
+    if (itensParaSalvar.length > 0) {
+      await prisma.itemPlanilha.createMany({
+        data: itensParaSalvar.map((item) => ({
+          loteId,
+          linhaOrigem: item.linhaOrigem,
+          codigoItemOuServico: item.codigoItemOuServico,
+          descricaoItemOuServico: item.descricaoItemOuServico,
+          ncm: item.ncm,
+          nbs: item.nbs,
+          linhaValida: item.linhaValida,
+          motivoInvalidade: item.motivoInvalidade,
+        })),
+      });
     }
 
     const loteAtualizado = await prisma.lote.update({
@@ -129,6 +182,7 @@ export async function POST(req: NextRequest) {
       nomeArquivo: arquivo.name,
       abaLida: nomeAba,
       lote: loteAtualizado,
+      totalItensSalvos: itensParaSalvar.length,
     });
   } catch (error) {
     console.error("Erro no upload da planilha:", error);
