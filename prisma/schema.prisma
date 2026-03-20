@@ -115,11 +115,34 @@ model XmlDocumento {
   createdAt           DateTime            @default(now()) @map("created_at")
   updatedAt           DateTime            @updatedAt @map("updated_at")
 
-  lote Lote @relation(fields: [loteId], references: [id], onDelete: Cascade)
+  lote     Lote      @relation(fields: [loteId], references: [id], onDelete: Cascade)
+  itensXml ItemXml[]
 
   @@index([loteId])
   @@index([statusXml])
   @@map("xml_documentos")
+}
+
+model ItemXml {
+  id             String   @id @default(cuid())
+  xmlDocumentoId String   @map("xml_documento_id")
+  numeroItem     Int      @map("numero_item")
+  codigoItem     String?  @map("codigo_item")
+  descricaoItem  String   @map("descricao_item")
+  ncm            String?
+  cfop           String?
+  quantidade     Decimal? @db.Decimal(14, 4)
+  valorUnitario  Decimal? @map("valor_unitario") @db.Decimal(14, 4)
+  valorTotal     Decimal? @map("valor_total") @db.Decimal(14, 2)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  xmlDocumento XmlDocumento @relation(fields: [xmlDocumentoId], references: [id], onDelete: Cascade)
+
+  @@index([xmlDocumentoId])
+  @@index([codigoItem])
+  @@index([ncm])
+  @@map("itens_xml")
 }
 
 model DivergenciaXmlPlanilha {

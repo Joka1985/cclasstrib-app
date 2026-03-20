@@ -47,7 +47,7 @@ export default function UploadXmlPage() {
       }
 
       setMensagem(
-        `XML recebido com sucesso. Status: ${dados.xmlDocumento.statusXml}`
+        `XML recebido com sucesso. Status: ${dados.xmlDocumento.statusXml}. Itens do XML: ${dados.totalItensXml}`
       );
       setLoteId("");
       setArquivo(null);

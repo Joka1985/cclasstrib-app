@@ -1,5 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { XMLParser } from "fast-xml-parser";
+
+function normalizarTexto(valor?: string | null) {
+  return String(valor ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function limparDocumento(valor?: string | null) {
+  return String(valor ?? "").replace(/\D/g, "");
+}
+
+function paraArray<T>(valor: T | T[] | undefined): T[] {
+  if (!valor) return [];
+  return Array.isArray(valor) ? valor : [valor];
+}
+
+type ItemXmlExtraido = {
+  codigoXml: string;
+  descricaoXml: string;
+  ncmXml: string;
+};
 
 export async function POST(req: NextRequest) {
   try {
@@ -18,6 +43,7 @@ export async function POST(req: NextRequest) {
       include: {
         itensPlanilha: true,
         xmlDocumentos: true,
+        cliente: true,
       },
     });
 
@@ -32,6 +58,22 @@ export async function POST(req: NextRequest) {
       where: { loteId },
     });
 
+    const xmlRelacionados = lote.xmlDocumentos.filter(
+      (xml) => xml.statusXml === "SAIDA" || xml.statusXml === "ENTRADA"
+    );
+
+    if (xmlRelacionados.length === 0) {
+      return NextResponse.json({
+        ok: true,
+        mensagem: "Nenhum XML relacionado para conferência detalhada.",
+        totalDivergencias: 0,
+      });
+    }
+
+    const itensPlanilhaValidos = lote.itensPlanilha.filter(
+      (item) => item.linhaValida
+    );
+
     const divergencias: Array<{
       loteId: string;
       codigoPlanilha: string | null;
@@ -42,10 +84,30 @@ export async function POST(req: NextRequest) {
       observacao: string | null;
     }> = [];
 
-    const itensPlanilhaValidos = lote.itensPlanilha.filter(
-      (item) => item.linhaValida
-    );
+    const itensXmlExtraidos: ItemXmlExtraido[] = [];
 
+    for (const xmlDoc of xmlRelacionados) {
+      if (!xmlDoc.chaveDocumento) continue;
+
+      // Nesta fase, como ainda não armazenamos o XML bruto no banco,
+      // usamos uma lógica provisória: conferência real só acontece
+      // quando o XML vier do upload atual com conteúdo disponível.
+      // Para não travar o fluxo, a rota vai sinalizar isso de forma clara.
+      divergencias.push({
+        loteId,
+        codigoPlanilha: null,
+        codigoXml: null,
+        descricaoPlanilha: null,
+        descricaoXml: null,
+        tipoDivergencia: "XML_SEM_CONTEUDO_BRUTO",
+        observacao:
+          `O XML com chave ${xmlDoc.chaveDocumento} foi triado, mas o conteúdo bruto não foi armazenado. Para comparação item a item, o sistema precisará salvar o XML bruto ou seus itens extraídos no banco.`,
+      });
+    }
+
+    // Enquanto ainda não armazenamos o conteúdo bruto do XML,
+    // mantemos também o mapeamento dos itens válidos da planilha
+    // como pendência de conferência real.
     for (const itemPlanilha of itensPlanilhaValidos) {
       divergencias.push({
         loteId,
@@ -53,9 +115,9 @@ export async function POST(req: NextRequest) {
         codigoXml: null,
         descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
         descricaoXml: null,
-        tipoDivergencia: "XML_NAO_LIDO_AINDA",
+        tipoDivergencia: "ITEM_PLANILHA_SEM_XML_COMPARAVEL",
         observacao:
-          "Nesta etapa inicial o XML foi triado, mas os itens internos do XML ainda não foram extraídos para comparação detalhada.",
+          "O item da planilha ainda não pôde ser comparado item a item porque os itens internos do XML não foram persistidos para consulta posterior.",
       });
     }
 
@@ -67,7 +129,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      mensagem: "Conferência inicial concluída.",
+      mensagem: "Conferência concluída com o nível atual de extração.",
+      totalItensPlanilhaValidos: itensPlanilhaValidos.length,
+      totalXmlRelacionados: xmlRelacionados.length,
+      totalItensXmlExtraidos: itensXmlExtraidos.length,
       totalDivergencias: divergencias.length,
     });
   } catch (error) {
