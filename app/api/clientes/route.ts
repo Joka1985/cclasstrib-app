@@ -17,10 +17,29 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    return NextResponse.json({ ok: true, cliente }, { status: 201 });
+    const lote = await prisma.lote.create({
+      data: {
+        clienteId: cliente.id,
+        statusLote: "DOCUMENTACAO_PENDENTE",
+        quantidadeLinhasPlanilha: 0,
+        quantidadeLinhasValidas: 0,
+        quantidadeLinhasInvalidas: 0,
+        valorUnitario: 0,
+        valorTotal: 0,
+      },
+    });
+
+    return NextResponse.json(
+      {
+        ok: true,
+        cliente,
+        lote,
+      },
+      { status: 201 }
+    );
   } catch (error) {
     return NextResponse.json(
-      { ok: false, error: "Erro ao criar cliente" },
+      { ok: false, error: "Erro ao criar cliente e lote" },
       { status: 500 }
     );
   }

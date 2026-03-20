@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 type FormData = {
   tipoPessoa: "PF" | "PJ";
@@ -13,6 +14,8 @@ type FormData = {
 };
 
 export default function CadastroPage() {
+  const router = useRouter();
+
   const [form, setForm] = useState<FormData>({
     tipoPessoa: "PJ",
     nomeRazaoSocial: "",
@@ -56,16 +59,14 @@ export default function CadastroPage() {
         throw new Error(dados.error || "Erro ao cadastrar cliente");
       }
 
-      setMensagem("Cliente cadastrado com sucesso.");
-      setForm({
-        tipoPessoa: "PJ",
-        nomeRazaoSocial: "",
-        cpfCnpj: "",
-        atividadePrincipal: "",
-        email: "",
-        telefone: "",
-        uf: "",
-      });
+      localStorage.setItem("clienteId", dados.cliente.id);
+      localStorage.setItem("loteId", dados.lote.id);
+
+      setMensagem("Cadastro concluído. Redirecionando para upload da planilha...");
+
+      setTimeout(() => {
+        router.push("/upload-planilha");
+      }, 1200);
     } catch (error) {
       const mensagemErro =
         error instanceof Error ? error.message : "Erro inesperado";
@@ -80,7 +81,7 @@ export default function CadastroPage() {
       <div className="mx-auto max-w-3xl rounded-2xl bg-white p-8 shadow">
         <h1 className="text-3xl font-bold text-zinc-900">Cadastro do cliente</h1>
         <p className="mt-2 text-sm text-zinc-600">
-          Preencha os dados abaixo para criar o cadastro inicial do cliente.
+          Preencha os dados abaixo para iniciar o processo.
         </p>
 
         <form onSubmit={enviarFormulario} className="mt-8 space-y-5">
@@ -193,7 +194,7 @@ export default function CadastroPage() {
             disabled={carregando}
             className="w-full rounded-xl bg-black px-4 py-3 font-medium text-white disabled:opacity-60"
           >
-            {carregando ? "Salvando..." : "Cadastrar cliente"}
+            {carregando ? "Salvando..." : "Continuar"}
           </button>
 
           {mensagem && (

@@ -1,16 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function UploadPlanilhaPage() {
+  const router = useRouter();
+
   const [loteId, setLoteId] = useState("");
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [mensagem, setMensagem] = useState("");
   const [carregando, setCarregando] = useState(false);
 
+  useEffect(() => {
+    const loteIdSalvo = localStorage.getItem("loteId");
+
+    if (!loteIdSalvo) {
+      setMensagem("Nenhum lote encontrado. Faça o cadastro primeiro.");
+      return;
+    }
+
+    setLoteId(loteIdSalvo);
+  }, []);
+
   async function enviarPlanilha(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setMensagem("");
+
+    if (!loteId) {
+      setMensagem("Nenhum lote encontrado. Faça o cadastro primeiro.");
+      return;
+    }
 
     if (!arquivo) {
       setMensagem("Selecione uma planilha antes de enviar.");
@@ -36,10 +55,12 @@ export default function UploadPlanilhaPage() {
       }
 
       setMensagem(
-        `Upload concluído com sucesso. Arquivo: ${dados.nomeArquivo}. Total: ${dados.lote.quantidadeLinhasPlanilha}, válidas: ${dados.lote.quantidadeLinhasValidas}, inválidas: ${dados.lote.quantidadeLinhasInvalidas}`
-);
-      setLoteId("");
-      setArquivo(null);
+        `Upload concluído com sucesso. Arquivo: ${dados.nomeArquivo}. Total: ${dados.lote.quantidadeLinhasPlanilha}, válidas: ${dados.lote.quantidadeLinhasValidas}, inválidas: ${dados.lote.quantidadeLinhasInvalidas}, itens salvos: ${dados.totalItensSalvos}`
+      );
+
+      setTimeout(() => {
+        router.push("/upload-xml");
+      }, 1200);
     } catch (error) {
       const mensagemErro =
         error instanceof Error ? error.message : "Erro inesperado";
@@ -54,24 +75,10 @@ export default function UploadPlanilhaPage() {
       <div className="mx-auto max-w-3xl rounded-2xl bg-white p-8 shadow">
         <h1 className="text-3xl font-bold text-zinc-900">Upload da planilha</h1>
         <p className="mt-2 text-sm text-zinc-600">
-          Informe o ID do lote e envie a planilha para validação inicial.
+          Envie a planilha para validação inicial.
         </p>
 
         <form onSubmit={enviarPlanilha} className="mt-8 space-y-5">
-          <div>
-            <label className="mb-2 block text-sm font-medium text-zinc-700">
-              ID do lote
-            </label>
-            <input
-              type="text"
-              value={loteId}
-              onChange={(e) => setLoteId(e.target.value)}
-              className="w-full rounded-xl border border-zinc-300 px-4 py-3"
-              placeholder="Cole aqui o ID do lote"
-              required
-            />
-          </div>
-
           <div>
             <label className="mb-2 block text-sm font-medium text-zinc-700">
               Arquivo da planilha

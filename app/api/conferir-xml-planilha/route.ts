@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { XMLParser } from "fast-xml-parser";
 
 function normalizarTexto(valor?: string | null) {
   return String(valor ?? "")
@@ -11,25 +10,10 @@ function normalizarTexto(valor?: string | null) {
     .toLowerCase();
 }
 
-function limparDocumento(valor?: string | null) {
-  return String(valor ?? "").replace(/\D/g, "");
-}
-
-function paraArray<T>(valor: T | T[] | undefined): T[] {
-  if (!valor) return [];
-  return Array.isArray(valor) ? valor : [valor];
-}
-
-type ItemXmlExtraido = {
-  codigoXml: string;
-  descricaoXml: string;
-  ncmXml: string;
-};
-
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const loteId = body.loteId;
+    const loteId = body.loteId as string | undefined;
 
     if (!loteId) {
       return NextResponse.json(
@@ -40,11 +24,6 @@ export async function POST(req: NextRequest) {
 
     const lote = await prisma.lote.findUnique({
       where: { id: loteId },
-      include: {
-        itensPlanilha: true,
-        xmlDocumentos: true,
-        cliente: true,
-      },
     });
 
     if (!lote) {
@@ -54,13 +33,28 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const itensPlanilha = await prisma.itemPlanilha.findMany({
+      where: {
+        loteId,
+        linhaValida: true,
+      },
+    });
+
+    const xmlRelacionados = await prisma.xmlDocumento.findMany({
+      where: {
+        loteId,
+        statusXml: {
+          in: ["SAIDA", "ENTRADA"],
+        },
+      },
+      include: {
+        itensXml: true,
+      },
+    });
+
     await prisma.divergenciaXmlPlanilha.deleteMany({
       where: { loteId },
     });
-
-    const xmlRelacionados = lote.xmlDocumentos.filter(
-      (xml) => xml.statusXml === "SAIDA" || xml.statusXml === "ENTRADA"
-    );
 
     if (xmlRelacionados.length === 0) {
       return NextResponse.json({
@@ -70,9 +64,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const itensPlanilhaValidos = lote.itensPlanilha.filter(
-      (item) => item.linhaValida
-    );
+    const itensXml = xmlRelacionados.flatMap((xmlDoc) => xmlDoc.itensXml);
 
     const divergencias: Array<{
       loteId: string;
@@ -84,41 +76,116 @@ export async function POST(req: NextRequest) {
       observacao: string | null;
     }> = [];
 
-    const itensXmlExtraidos: ItemXmlExtraido[] = [];
+    const itensXmlUsados = new Set<string>();
 
-    for (const xmlDoc of xmlRelacionados) {
-      if (!xmlDoc.chaveDocumento) continue;
+    for (const itemPlanilha of itensPlanilha) {
+      const matchPorCodigo = itensXml.find(
+        (itemXml) =>
+          itemXml.codigoItem &&
+          itemXml.codigoItem.trim() === itemPlanilha.codigoItemOuServico.trim()
+      );
 
-      // Nesta fase, como ainda não armazenamos o XML bruto no banco,
-      // usamos uma lógica provisória: conferência real só acontece
-      // quando o XML vier do upload atual com conteúdo disponível.
-      // Para não travar o fluxo, a rota vai sinalizar isso de forma clara.
-      divergencias.push({
-        loteId,
-        codigoPlanilha: null,
-        codigoXml: null,
-        descricaoPlanilha: null,
-        descricaoXml: null,
-        tipoDivergencia: "XML_SEM_CONTEUDO_BRUTO",
-        observacao:
-          `O XML com chave ${xmlDoc.chaveDocumento} foi triado, mas o conteúdo bruto não foi armazenado. Para comparação item a item, o sistema precisará salvar o XML bruto ou seus itens extraídos no banco.`,
-      });
-    }
+      if (matchPorCodigo) {
+        itensXmlUsados.add(matchPorCodigo.id);
 
-    // Enquanto ainda não armazenamos o conteúdo bruto do XML,
-    // mantemos também o mapeamento dos itens válidos da planilha
-    // como pendência de conferência real.
-    for (const itemPlanilha of itensPlanilhaValidos) {
+        const descricaoPlanilhaNormalizada = normalizarTexto(
+          itemPlanilha.descricaoItemOuServico
+        );
+        const descricaoXmlNormalizada = normalizarTexto(
+          matchPorCodigo.descricaoItem
+        );
+
+        if (descricaoPlanilhaNormalizada !== descricaoXmlNormalizada) {
+          divergencias.push({
+            loteId,
+            codigoPlanilha: itemPlanilha.codigoItemOuServico,
+            codigoXml: matchPorCodigo.codigoItem,
+            descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
+            descricaoXml: matchPorCodigo.descricaoItem,
+            tipoDivergencia: "DESCRICAO_DIVERGENTE",
+            observacao: "Código encontrado, mas a descrição está diferente.",
+          });
+        }
+
+        const ncmPlanilha = String(itemPlanilha.ncm ?? "").trim();
+        const ncmXml = String(matchPorCodigo.ncm ?? "").trim();
+
+        if (ncmPlanilha && ncmXml && ncmPlanilha !== ncmXml) {
+          divergencias.push({
+            loteId,
+            codigoPlanilha: itemPlanilha.codigoItemOuServico,
+            codigoXml: matchPorCodigo.codigoItem,
+            descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
+            descricaoXml: matchPorCodigo.descricaoItem,
+            tipoDivergencia: "NCM_DIVERGENTE",
+            observacao: `NCM planilha: ${ncmPlanilha} | NCM XML: ${ncmXml}`,
+          });
+        }
+
+        continue;
+      }
+
+      const matchPorDescricao = itensXml.find(
+        (itemXml) =>
+          normalizarTexto(itemXml.descricaoItem) ===
+          normalizarTexto(itemPlanilha.descricaoItemOuServico)
+      );
+
+      if (matchPorDescricao) {
+        itensXmlUsados.add(matchPorDescricao.id);
+
+        divergencias.push({
+          loteId,
+          codigoPlanilha: itemPlanilha.codigoItemOuServico,
+          codigoXml: matchPorDescricao.codigoItem,
+          descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
+          descricaoXml: matchPorDescricao.descricaoItem,
+          tipoDivergencia: "CODIGO_DIVERGENTE",
+          observacao:
+            "Descrição compatível encontrada no XML, mas o código é diferente.",
+        });
+
+        const ncmPlanilha = String(itemPlanilha.ncm ?? "").trim();
+        const ncmXml = String(matchPorDescricao.ncm ?? "").trim();
+
+        if (ncmPlanilha && ncmXml && ncmPlanilha !== ncmXml) {
+          divergencias.push({
+            loteId,
+            codigoPlanilha: itemPlanilha.codigoItemOuServico,
+            codigoXml: matchPorDescricao.codigoItem,
+            descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
+            descricaoXml: matchPorDescricao.descricaoItem,
+            tipoDivergencia: "NCM_DIVERGENTE",
+            observacao: `NCM planilha: ${ncmPlanilha} | NCM XML: ${ncmXml}`,
+          });
+        }
+
+        continue;
+      }
+
       divergencias.push({
         loteId,
         codigoPlanilha: itemPlanilha.codigoItemOuServico,
         codigoXml: null,
         descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
         descricaoXml: null,
-        tipoDivergencia: "ITEM_PLANILHA_SEM_XML_COMPARAVEL",
-        observacao:
-          "O item da planilha ainda não pôde ser comparado item a item porque os itens internos do XML não foram persistidos para consulta posterior.",
+        tipoDivergencia: "ITEM_PLANILHA_NAO_ENCONTRADO_NO_XML",
+        observacao: "Nenhum item correspondente foi encontrado no XML.",
       });
+    }
+
+    for (const itemXml of itensXml) {
+      if (!itensXmlUsados.has(itemXml.id)) {
+        divergencias.push({
+          loteId,
+          codigoPlanilha: null,
+          codigoXml: itemXml.codigoItem,
+          descricaoPlanilha: null,
+          descricaoXml: itemXml.descricaoItem,
+          tipoDivergencia: "ITEM_XML_NAO_ENCONTRADO_NA_PLANILHA",
+          observacao: "Item existente no XML sem correspondente na planilha.",
+        });
+      }
     }
 
     if (divergencias.length > 0) {
@@ -129,10 +196,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      mensagem: "Conferência concluída com o nível atual de extração.",
-      totalItensPlanilhaValidos: itensPlanilhaValidos.length,
+      mensagem: "Conferência detalhada concluída.",
+      totalItensPlanilhaValidos: itensPlanilha.length,
       totalXmlRelacionados: xmlRelacionados.length,
-      totalItensXmlExtraidos: itensXmlExtraidos.length,
+      totalItensXml: itensXml.length,
       totalDivergencias: divergencias.length,
     });
   } catch (error) {
