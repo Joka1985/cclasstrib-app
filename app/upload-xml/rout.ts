@@ -166,33 +166,20 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    let emailEnviado = false;
+    let emailEnviado = true;
     let emailErro: string | null = null;
 
-    if (!lote.cliente.email) {
-      emailErro = "Cliente sem e-mail cadastrado.";
-    } else {
-      try {
-        await enviarEmailSolicitacao({
-          para: lote.cliente.email,
-          nomeCliente: lote.cliente.nomeRazaoSocial,
-          protocolo: lote.protocolo ?? "",
-        });
-
-        emailEnviado = true;
-      } catch (error: unknown) {
-        if (error instanceof Error) {
-          emailErro = error.message;
-        } else {
-          try {
-            emailErro = JSON.stringify(error);
-          } catch {
-            emailErro = "Falha ao enviar e-mail sem detalhe disponível.";
-          }
-        }
-
-        console.error("Erro ao enviar e-mail após upload do XML:", error);
-      }
+    try {
+      await enviarEmailSolicitacao({
+        para: lote.cliente.email,
+        nomeCliente: lote.cliente.nomeRazaoSocial,
+        protocolo: lote.protocolo ?? "",
+      });
+    } catch (error) {
+      emailEnviado = false;
+      emailErro =
+        error instanceof Error ? error.message : "Erro ao enviar e-mail";
+      console.error("Erro ao enviar e-mail após upload do XML:", error);
     }
 
     return NextResponse.json({

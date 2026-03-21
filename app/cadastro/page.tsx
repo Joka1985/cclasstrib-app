@@ -127,8 +127,11 @@ export default function CadastroPage() {
 
       localStorage.setItem("clienteId", dados.cliente.id);
       localStorage.setItem("loteId", dados.lote.id);
+      localStorage.setItem("protocolo", dados.lote.protocolo ?? "");
 
-      setMensagem("Cadastro concluído. Redirecionando para upload da planilha...");
+      setMensagem(
+        "Cadastro concluído. Redirecionando para upload da planilha..."
+      );
 
       setTimeout(() => {
         router.push("/upload-planilha");

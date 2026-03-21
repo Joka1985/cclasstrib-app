@@ -61,6 +61,7 @@ model Cliente {
 model Lote {
   id                        String     @id @default(cuid())
   clienteId                 String     @map("cliente_id")
+  protocolo                 String?    @unique
   statusLote                StatusLote @default(DOCUMENTACAO_PENDENTE) @map("status_lote")
   quantidadeLinhasPlanilha  Int        @default(0) @map("quantidade_linhas_planilha")
   quantidadeLinhasValidas   Int        @default(0) @map("quantidade_linhas_validas")
@@ -89,6 +90,7 @@ model ItemPlanilha {
   descricaoItemOuServico String   @map("descricao_item_ou_servico")
   ncm                    String?
   nbs                    String?
+  cfopInformadoManual    String?  @map("cfop_informado_manual")
   linhaValida            Boolean  @default(false) @map("linha_valida")
   motivoInvalidade       String?  @map("motivo_invalidade")
   createdAt              DateTime @default(now()) @map("created_at")

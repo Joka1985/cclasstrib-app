@@ -1,14 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { XMLParser } from "fast-xml-parser";
+import * as XLSX from "xlsx";
 
-function limparDocumento(valor?: string) {
+type LinhaBruta = Record<string, unknown>;
+
+function normalizarCabecalho(valor: string) {
+  return valor
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9\s]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+}
+
+function limparDocumento(valor?: string | null) {
   return String(valor ?? "").replace(/\D/g, "");
 }
 
-function primeiroValor<T>(valor: T | T[] | undefined): T | undefined {
-  if (Array.isArray(valor)) return valor[0];
-  return valor;
+function obterCampo(linha: LinhaBruta, nomesPossiveis: string[]) {
+  const mapaNormalizado: Record<string, unknown> = {};
+
+  for (const chave of Object.keys(linha)) {
+    mapaNormalizado[normalizarCabecalho(chave)] = linha[chave];
+  }
+
+  for (const nome of nomesPossiveis) {
+    const valor = mapaNormalizado[normalizarCabecalho(nome)];
+    if (valor !== undefined) {
+      return String(valor ?? "").trim();
+    }
+  }
+
+  return "";
 }
 
 export async function POST(req: NextRequest) {
@@ -27,85 +51,218 @@ export async function POST(req: NextRequest) {
 
     if (!arquivo || !(arquivo instanceof File)) {
       return NextResponse.json(
-        { ok: false, error: "Arquivo XML é obrigatório" },
+        { ok: false, error: "Arquivo é obrigatório" },
         { status: 400 }
       );
     }
 
-    const lote = await prisma.lote.findUnique({
+    const loteExiste = await prisma.lote.findUnique({
       where: { id: loteId },
-      include: { cliente: true },
+      include: {
+        cliente: true,
+      },
     });
 
-    if (!lote) {
+    if (!loteExiste) {
       return NextResponse.json(
         { ok: false, error: "Lote não encontrado" },
         { status: 404 }
       );
     }
 
-    const textoXml = await arquivo.text();
+    const bytes = await arquivo.arrayBuffer();
+    const buffer = Buffer.from(bytes);
 
-    const parser = new XMLParser({
-      ignoreAttributes: false,
-      attributeNamePrefix: "",
-    });
+    const workbook = XLSX.read(buffer, { type: "buffer" });
 
-    const xml = parser.parse(textoXml);
+    // 1) Validar aba CADASTRO_CLIENTE e documento em B4
+    const abaCadastroCliente =
+      workbook.SheetNames.find(
+        (nome) => nome.trim().toUpperCase() === "CADASTRO_CLIENTE"
+      ) || null;
 
-    const nfeProc = xml?.nfeProc;
-    const nfe = nfeProc?.NFe || xml?.NFe;
-    const infNFe = nfe?.infNFe;
-
-    if (!infNFe) {
+    if (!abaCadastroCliente) {
       return NextResponse.json(
-        { ok: false, error: "Estrutura de XML não reconhecida" },
+        {
+          ok: false,
+          error: "A planilha não contém a aba obrigatória CADASTRO_CLIENTE.",
+        },
         { status: 400 }
       );
     }
 
-    const emit = primeiroValor(infNFe.emit);
-    const dest = primeiroValor(infNFe.dest);
-    const ide = primeiroValor(infNFe.ide);
+    const worksheetCadastro = workbook.Sheets[abaCadastroCliente];
+    const documentoPlanilhaBruto = worksheetCadastro?.B4?.v;
 
-    const emitenteCpfCnpj = limparDocumento(emit?.CNPJ || emit?.CPF);
-    const destinatarioCpfCnpj = limparDocumento(dest?.CNPJ || dest?.CPF);
-    const documentoCliente = limparDocumento(lote.cliente.cpfCnpj);
+    const documentoPlanilha = limparDocumento(documentoPlanilhaBruto);
+    const documentoCadastro = limparDocumento(loteExiste.cliente.cpfCnpj);
 
-    let statusXml: "SAIDA" | "ENTRADA" | "NAO_RELACIONADO" | "INVALIDO" = "INVALIDO";
-
-    if (emitenteCpfCnpj === documentoCliente) {
-      statusXml = "SAIDA";
-    } else if (destinatarioCpfCnpj === documentoCliente) {
-      statusXml = "ENTRADA";
-    } else {
-      statusXml = "NAO_RELACIONADO";
+    if (!documentoPlanilha) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "A planilha não contém CPF/CNPJ válido em CADASTRO_CLIENTE!B4.",
+        },
+        { status: 400 }
+      );
     }
 
-    const xmlDocumento = await prisma.xmlDocumento.create({
+    if (documentoPlanilha !== documentoCadastro) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "CPF/CNPJ da planilha não confere com o cadastro do cliente deste lote.",
+        },
+        { status: 400 }
+      );
+    }
+
+    // 2) Ler aba PRODUTOS_SERVICOS
+    const nomeAbaProdutos =
+      workbook.SheetNames.find(
+        (nome) => nome.trim().toUpperCase() === "PRODUTOS_SERVICOS"
+      ) || workbook.SheetNames[0];
+
+    const worksheetProdutos = workbook.Sheets[nomeAbaProdutos];
+
+    const linhas = XLSX.utils.sheet_to_json<LinhaBruta>(worksheetProdutos, {
+      defval: "",
+    });
+
+    let quantidadeLinhasPlanilha = 0;
+    let quantidadeLinhasValidas = 0;
+    let quantidadeLinhasInvalidas = 0;
+
+    const itensParaSalvar: Array<{
+      linhaOrigem: number;
+      codigoItemOuServico: string;
+      descricaoItemOuServico: string;
+      ncm: string | null;
+      nbs: string | null;
+      cfopInformadoManual: string | null;
+      linhaValida: boolean;
+      motivoInvalidade: string | null;
+    }> = [];
+
+    let indiceLinha = 1;
+
+    for (const linha of linhas) {
+      indiceLinha++;
+
+      const codigo = obterCampo(linha, [
+        "codigo_item_ou_servico",
+        "cod_produto_ou_servico",
+        "codigo_item",
+        "codigo",
+      ]);
+
+      const descricao = obterCampo(linha, [
+        "descricao_item_ou_servico",
+        "descricao",
+        "descricao_item",
+      ]);
+
+      const ncm = obterCampo(linha, ["ncm"]);
+      const nbs = obterCampo(linha, ["nbs"]);
+      const cfopInformadoManual = obterCampo(linha, ["cfop"]);
+
+      const linhaVazia =
+        !codigo && !descricao && !ncm && !nbs && !cfopInformadoManual;
+
+      if (linhaVazia) continue;
+
+      quantidadeLinhasPlanilha++;
+
+      let motivoInvalidade: string | null = null;
+
+      if (!codigo) {
+        motivoInvalidade = "Código não informado";
+      } else if (!descricao) {
+        motivoInvalidade = "Descrição não informada";
+      } else if (!ncm && !nbs) {
+        motivoInvalidade = "NCM ou NBS não informado";
+      }
+
+      const linhaValida = motivoInvalidade === null;
+
+      if (linhaValida) {
+        quantidadeLinhasValidas++;
+      } else {
+        quantidadeLinhasInvalidas++;
+      }
+
+      itensParaSalvar.push({
+        linhaOrigem: indiceLinha,
+        codigoItemOuServico: codigo,
+        descricaoItemOuServico: descricao,
+        ncm: ncm || null,
+        nbs: nbs || null,
+        cfopInformadoManual: cfopInformadoManual || null,
+        linhaValida,
+        motivoInvalidade,
+      });
+    }
+
+    await prisma.itemPlanilha.deleteMany({
+      where: { loteId },
+    });
+
+    if (itensParaSalvar.length > 0) {
+      await prisma.itemPlanilha.createMany({
+        data: itensParaSalvar.map((item) => ({
+          loteId,
+          linhaOrigem: item.linhaOrigem,
+          codigoItemOuServico: item.codigoItemOuServico,
+          descricaoItemOuServico: item.descricaoItemOuServico,
+          ncm: item.ncm,
+          nbs: item.nbs,
+          cfopInformadoManual: item.cfopInformadoManual,
+          linhaValida: item.linhaValida,
+          motivoInvalidade: item.motivoInvalidade,
+        })),
+      });
+    }
+
+    const loteAtualizado = await prisma.lote.update({
+      where: { id: loteId },
       data: {
-        loteId,
-        tipoDocumento: "NFE",
-        chaveDocumento: infNFe?.Id ? String(infNFe.Id).replace(/^NFe/, "") : null,
-        emitenteCpfCnpj,
-        emitenteNome: emit?.xNome ?? null,
-        destinatarioCpfCnpj: destinatarioCpfCnpj || null,
-        destinatarioNome: dest?.xNome ?? null,
-        dataEmissao: ide?.dhEmi ? new Date(ide.dhEmi) : null,
-        statusXml,
+        quantidadeLinhasPlanilha,
+        quantidadeLinhasValidas,
+        quantidadeLinhasInvalidas,
       },
     });
 
+    const quantidadeItensComCfopManual = itensParaSalvar.filter(
+      (item) => !!item.cfopInformadoManual
+    ).length;
+
     return NextResponse.json({
       ok: true,
-      mensagem: "XML recebido com sucesso.",
-      xmlDocumento,
+      mensagem: "Planilha processada com sucesso.",
+      nomeArquivo: arquivo.name,
+      abaLida: nomeAbaProdutos,
+      lote: loteAtualizado,
+      totalItensSalvos: itensParaSalvar.length,
+      validacaoCadastro: {
+        documentoCadastro,
+        documentoPlanilha,
+        confere: documentoPlanilha === documentoCadastro,
+      },
+      validacaoOperacional: {
+        itensComCfopManual: quantidadeItensComCfopManual,
+        observacao:
+          quantidadeItensComCfopManual > 0
+            ? "Há itens com CFOP informado manualmente pelo cliente."
+            : "Não há CFOP manual informado na planilha.",
+      },
     });
   } catch (error) {
-    console.error("Erro no upload do XML:", error);
+    console.error("Erro no upload da planilha:", error);
 
     return NextResponse.json(
-      { ok: false, error: "Erro ao processar XML" },
+      { ok: false, error: "Erro ao processar planilha" },
       { status: 500 }
     );
   }
