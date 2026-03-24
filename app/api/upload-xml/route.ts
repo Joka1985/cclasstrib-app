@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { XMLParser } from "fast-xml-parser";
-import { enviarEmailSolicitacao } from "@/lib/email";
 
 function limparDocumento(valor?: string) {
   return String(valor ?? "").replace(/\D/g, "");
@@ -15,6 +14,24 @@ function primeiroValor<T>(valor: T | T[] | undefined): T | undefined {
 function paraArray<T>(valor: T | T[] | undefined): T[] {
   if (!valor) return [];
   return Array.isArray(valor) ? valor : [valor];
+}
+
+function normalizarTexto(valor?: string | null) {
+  return String(valor ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function chaveCodigoDescricao(codigo?: string | null, descricao?: string | null) {
+  const codigoNormalizado = normalizarTexto(codigo);
+  const descricaoNormalizada = normalizarTexto(descricao);
+
+  if (codigoNormalizado) return `COD:${codigoNormalizado}`;
+  if (descricaoNormalizada) return `DESC:${descricaoNormalizada}`;
+  return "";
 }
 
 export async function GET() {
@@ -140,7 +157,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    const itensXml = dets.map((det: any, index: number) => {
+    const itensXmlParaSalvar = dets.map((det: any, index: number) => {
       const prod = primeiroValor(det?.prod);
 
       const quantidade = prod?.qCom ? Number(prod.qCom) : null;
@@ -160,48 +177,188 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    if (itensXml.length > 0) {
+    if (itensXmlParaSalvar.length > 0) {
       await prisma.itemXml.createMany({
-        data: itensXml,
+        data: itensXmlParaSalvar,
       });
     }
 
-    let emailEnviado = false;
-    let emailErro: string | null = null;
+    await prisma.divergenciaXmlPlanilha.deleteMany({
+      where: { loteId },
+    });
 
-    if (!lote.cliente.email) {
-      emailErro = "Cliente sem e-mail cadastrado.";
-    } else {
-      try {
-        await enviarEmailSolicitacao({
-          para: lote.cliente.email,
-          nomeCliente: lote.cliente.nomeRazaoSocial,
-          protocolo: lote.protocolo ?? "",
-        });
+    const itensPlanilha = await prisma.itemPlanilha.findMany({
+      where: {
+        loteId,
+        linhaValida: true,
+      },
+      orderBy: { linhaOrigem: "asc" },
+    });
 
-        emailEnviado = true;
-      } catch (error: unknown) {
-        if (error instanceof Error) {
-          emailErro = error.message;
-        } else {
-          try {
-            emailErro = JSON.stringify(error);
-          } catch {
-            emailErro = "Falha ao enviar e-mail sem detalhe disponível.";
-          }
-        }
+    const xmlsRelacionados = await prisma.xmlDocumento.findMany({
+      where: {
+        loteId,
+        statusXml: {
+          in: ["SAIDA", "ENTRADA"],
+        },
+      },
+      include: {
+        itensXml: true,
+      },
+    });
 
-        console.error("Erro ao enviar e-mail após upload do XML:", error);
+    const itensXmlRelacionados = xmlsRelacionados.flatMap((doc) => doc.itensXml);
+
+    const divergencias: Array<{
+      loteId: string;
+      codigoPlanilha?: string | null;
+      codigoXml?: string | null;
+      descricaoPlanilha?: string | null;
+      descricaoXml?: string | null;
+      tipoDivergencia: string;
+      observacao?: string | null;
+    }> = [];
+
+    const mapaXml = new Map<
+      string,
+      {
+        codigoItem: string | null;
+        descricaoItem: string;
+        ncm: string | null;
+        cfop: string | null;
+      }[]
+    >();
+
+    for (const item of itensXmlRelacionados) {
+      const chave = chaveCodigoDescricao(item.codigoItem, item.descricaoItem);
+      if (!chave) continue;
+
+      if (!mapaXml.has(chave)) {
+        mapaXml.set(chave, []);
       }
+
+      mapaXml.get(chave)!.push({
+        codigoItem: item.codigoItem,
+        descricaoItem: item.descricaoItem,
+        ncm: item.ncm,
+        cfop: item.cfop,
+      });
+    }
+
+    for (const itemPlanilha of itensPlanilha) {
+      const chavePrincipal = chaveCodigoDescricao(
+        itemPlanilha.codigoItemOuServico,
+        itemPlanilha.descricaoItemOuServico
+      );
+
+      const chaveDescricao = itemPlanilha.descricaoItemOuServico
+        ? `DESC:${normalizarTexto(itemPlanilha.descricaoItemOuServico)}`
+        : "";
+
+      const candidatos =
+        (chavePrincipal && mapaXml.get(chavePrincipal)) ||
+        (chaveDescricao && mapaXml.get(chaveDescricao)) ||
+        [];
+
+      if (candidatos.length === 0) {
+        divergencias.push({
+          loteId,
+          codigoPlanilha: itemPlanilha.codigoItemOuServico,
+          descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
+          tipoDivergencia: "ITEM_PLANILHA_NAO_ENCONTRADO_NO_XML",
+          observacao: itemPlanilha.cfopInformadoManual
+            ? `Item sem correlação em XML relacionado. CFOP manual informado pelo cliente: ${itemPlanilha.cfopInformadoManual}.`
+            : "Item sem correlação em XML relacionado e sem CFOP manual informado.",
+        });
+        continue;
+      }
+
+      const itemXmlRef = candidatos[0];
+
+      const descricaoPlanilhaNormalizada = normalizarTexto(
+        itemPlanilha.descricaoItemOuServico
+      );
+      const descricaoXmlNormalizada = normalizarTexto(itemXmlRef.descricaoItem);
+
+      if (
+        descricaoPlanilhaNormalizada &&
+        descricaoXmlNormalizada &&
+        descricaoPlanilhaNormalizada !== descricaoXmlNormalizada
+      ) {
+        divergencias.push({
+          loteId,
+          codigoPlanilha: itemPlanilha.codigoItemOuServico,
+          codigoXml: itemXmlRef.codigoItem,
+          descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
+          descricaoXml: itemXmlRef.descricaoItem,
+          tipoDivergencia: "DESCRICAO_DIVERGENTE",
+          observacao: "Descrição da planilha difere da descrição encontrada no XML.",
+        });
+      }
+
+      if (
+        itemPlanilha.ncm &&
+        itemXmlRef.ncm &&
+        normalizarTexto(itemPlanilha.ncm) !== normalizarTexto(itemXmlRef.ncm)
+      ) {
+        divergencias.push({
+          loteId,
+          codigoPlanilha: itemPlanilha.codigoItemOuServico,
+          codigoXml: itemXmlRef.codigoItem,
+          descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
+          descricaoXml: itemXmlRef.descricaoItem,
+          tipoDivergencia: "NCM_DIVERGENTE",
+          observacao: `NCM planilha: ${itemPlanilha.ncm}. NCM XML: ${itemXmlRef.ncm}.`,
+        });
+      }
+    }
+
+    for (const itemXml of itensXmlRelacionados) {
+      const chaveXml = chaveCodigoDescricao(itemXml.codigoItem, itemXml.descricaoItem);
+      const chaveDescricaoXml = itemXml.descricaoItem
+        ? `DESC:${normalizarTexto(itemXml.descricaoItem)}`
+        : "";
+
+      const apareceuNaPlanilha = itensPlanilha.some((itemPlanilha) => {
+        const chavePlanilha = chaveCodigoDescricao(
+          itemPlanilha.codigoItemOuServico,
+          itemPlanilha.descricaoItemOuServico
+        );
+        const chaveDescricaoPlanilha = itemPlanilha.descricaoItemOuServico
+          ? `DESC:${normalizarTexto(itemPlanilha.descricaoItemOuServico)}`
+          : "";
+
+        return (
+          (!!chaveXml && chavePlanilha === chaveXml) ||
+          (!!chaveDescricaoXml && chaveDescricaoPlanilha === chaveDescricaoXml)
+        );
+      });
+
+      if (!apareceuNaPlanilha) {
+        divergencias.push({
+          loteId,
+          codigoXml: itemXml.codigoItem,
+          descricaoXml: itemXml.descricaoItem,
+          tipoDivergencia: "ITEM_XML_NAO_ENCONTRADO_NA_PLANILHA",
+          observacao: itemXml.cfop
+            ? `Item existente no XML com CFOP ${itemXml.cfop}, mas ausente na planilha.`
+            : "Item existente no XML, mas ausente na planilha.",
+        });
+      }
+    }
+
+    if (divergencias.length > 0) {
+      await prisma.divergenciaXmlPlanilha.createMany({
+        data: divergencias,
+      });
     }
 
     return NextResponse.json({
       ok: true,
       mensagem: "XML recebido com sucesso.",
       xmlDocumento,
-      totalItensXml: itensXml.length,
-      emailEnviado,
-      emailErro,
+      totalItensXml: itensXmlParaSalvar.length,
+      totalDivergencias: divergencias.length,
     });
   } catch (error) {
     console.error("Erro no upload do XML:", error);

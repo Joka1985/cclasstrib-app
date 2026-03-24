@@ -41,6 +41,12 @@ enum StatusXml {
   INVALIDO
 }
 
+enum ModoDocumentacao {
+  NAO_DEFINIDO
+  COM_XML
+  SEM_XML
+}
+
 model Cliente {
   id                 String     @id @default(cuid())
   tipoPessoa         TipoPessoa @map("tipo_pessoa")
@@ -59,18 +65,19 @@ model Cliente {
 }
 
 model Lote {
-  id                        String     @id @default(cuid())
-  clienteId                 String     @map("cliente_id")
-  protocolo                 String?    @unique
-  statusLote                StatusLote @default(DOCUMENTACAO_PENDENTE) @map("status_lote")
-  quantidadeLinhasPlanilha  Int        @default(0) @map("quantidade_linhas_planilha")
-  quantidadeLinhasValidas   Int        @default(0) @map("quantidade_linhas_validas")
-  quantidadeLinhasInvalidas Int        @default(0) @map("quantidade_linhas_invalidas")
-  valorUnitario             Decimal    @default(0) @map("valor_unitario") @db.Decimal(10, 2)
-  valorTotal                Decimal    @default(0) @map("valor_total") @db.Decimal(12, 2)
-  observacoesInternas       String?    @map("observacoes_internas")
-  createdAt                 DateTime   @default(now()) @map("created_at")
-  updatedAt                 DateTime   @updatedAt @map("updated_at")
+  id                        String           @id @default(cuid())
+  clienteId                 String           @map("cliente_id")
+  protocolo                 String?          @unique
+  modoDocumentacao          ModoDocumentacao @default(NAO_DEFINIDO) @map("modo_documentacao")
+  statusLote                StatusLote       @default(DOCUMENTACAO_PENDENTE) @map("status_lote")
+  quantidadeLinhasPlanilha  Int              @default(0) @map("quantidade_linhas_planilha")
+  quantidadeLinhasValidas   Int              @default(0) @map("quantidade_linhas_validas")
+  quantidadeLinhasInvalidas Int              @default(0) @map("quantidade_linhas_invalidas")
+  valorUnitario             Decimal          @default(0) @map("valor_unitario") @db.Decimal(10, 2)
+  valorTotal                Decimal          @default(0) @map("valor_total") @db.Decimal(12, 2)
+  observacoesInternas       String?          @map("observacoes_internas")
+  createdAt                 DateTime         @default(now()) @map("created_at")
+  updatedAt                 DateTime         @updatedAt @map("updated_at")
 
   cliente                 Cliente                  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
   itensPlanilha           ItemPlanilha[]

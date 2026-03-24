@@ -54,13 +54,20 @@ export default function UploadPlanilhaPage() {
         throw new Error(dados.error || "Erro ao enviar planilha");
       }
 
-      setMensagem(
-        `Upload concluído com sucesso. Arquivo: ${dados.nomeArquivo}. Total: ${dados.lote.quantidadeLinhasPlanilha}, válidas: ${dados.lote.quantidadeLinhasValidas}, inválidas: ${dados.lote.quantidadeLinhasInvalidas}, itens salvos: ${dados.totalItensSalvos}`
-      );
+      let mensagemFinal =
+        `Upload concluído com sucesso. Arquivo: ${dados.nomeArquivo}. ` +
+        `Total: ${dados.lote.quantidadeLinhasPlanilha}, válidas: ${dados.lote.quantidadeLinhasValidas}, ` +
+        `inválidas: ${dados.lote.quantidadeLinhasInvalidas}, itens salvos: ${dados.totalItensSalvos}.`;
+
+      if (dados.validacaoOperacional?.observacao) {
+        mensagemFinal += ` ${dados.validacaoOperacional.observacao}`;
+      }
+
+      setMensagem(mensagemFinal);
 
       setTimeout(() => {
-        router.push("/upload-xml");
-      }, 1200);
+        router.push("/escolha-documentacao");
+      }, 1600);
     } catch (error) {
       const mensagemErro =
         error instanceof Error ? error.message : "Erro inesperado";

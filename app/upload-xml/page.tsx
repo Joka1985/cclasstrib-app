@@ -3,316 +3,120 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-type DadosConferencia = {
-  lote: {
-    id: string;
-    protocolo: string | null;
-    cliente: string;
-    documento: string;
-  };
-  resumo: {
-    totalItensPlanilhaValidos: number;
-    totalItensUnicosConsiderados: number;
-    totalRelacionadosAoXml: number;
-    totalRelacionadosComDivergencia: number;
-    totalSemRelacaoComCfopManual: number;
-    totalSemRelacaoSemCfopManual: number;
-    totalAptosParaAnalise: number;
-    totalImprecisos: number;
-    totalDuplicadosConsolidados: number;
-    totalSomenteNoXml: number;
-    totalDivergenciasNcm: number;
-    totalDivergenciasDescricao: number;
-  };
-  aviso: string;
-};
-
-export default function ConferenciaFinalPage() {
+export default function UploadXmlPage() {
   const router = useRouter();
 
-  const [carregando, setCarregando] = useState(true);
-  const [processando, setProcessando] = useState(false);
+  const [loteId, setLoteId] = useState("");
+  const [arquivo, setArquivo] = useState<File | null>(null);
   const [mensagem, setMensagem] = useState("");
-  const [dados, setDados] = useState<DadosConferencia | null>(null);
+  const [carregando, setCarregando] = useState(false);
 
   useEffect(() => {
-    async function carregar() {
-      const loteId = localStorage.getItem("loteId");
+    const loteIdSalvo = localStorage.getItem("loteId");
 
-      if (!loteId) {
-        setMensagem("Nenhum lote encontrado. Faça o cadastro novamente.");
-        setCarregando(false);
-        return;
-      }
-
-      try {
-        const resposta = await fetch("/api/conferencia-final", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ loteId }),
-        });
-
-        const json = await resposta.json();
-
-        if (!resposta.ok) {
-          throw new Error(json.error || "Erro ao carregar conferência.");
-        }
-
-        setDados(json);
-      } catch (error) {
-        setMensagem(
-          error instanceof Error ? error.message : "Erro ao carregar conferência."
-        );
-      } finally {
-        setCarregando(false);
-      }
+    if (!loteIdSalvo) {
+      setMensagem("Nenhum lote encontrado. Faça o cadastro primeiro.");
+      return;
     }
 
-    carregar();
+    setLoteId(loteIdSalvo);
   }, []);
 
-  async function prosseguir() {
-    const loteId = localStorage.getItem("loteId");
+  async function enviarXml() {
+    setMensagem("");
 
-    if (!loteId) {
-      setMensagem("Nenhum lote encontrado.");
+    if (!loteId.trim()) {
+      setMensagem("Nenhum lote encontrado. Faça o cadastro primeiro.");
       return;
     }
 
-    setProcessando(true);
-    setMensagem("");
-
-    try {
-      const resposta = await fetch("/api/confirmar-solicitacao", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ loteId }),
-      });
-
-      const json = await resposta.json();
-
-      if (!resposta.ok) {
-        throw new Error(json.error || "Erro ao confirmar solicitação.");
-      }
-
-      router.push("/resumo");
-    } catch (error) {
-      setMensagem(
-        error instanceof Error ? error.message : "Erro ao confirmar solicitação."
-      );
-    } finally {
-      setProcessando(false);
-    }
-  }
-
-  async function naoProsseguir() {
-    const loteId = localStorage.getItem("loteId");
-
-    if (!loteId) {
-      setMensagem("Nenhum lote encontrado.");
+    if (!arquivo) {
+      setMensagem("Selecione um XML antes de enviar.");
       return;
     }
 
-    setProcessando(true);
-    setMensagem("");
+    setCarregando(true);
 
     try {
-      const resposta = await fetch("/api/cancelar-solicitacao", {
+      const formData = new FormData();
+      formData.append("loteId", loteId);
+      formData.append("arquivo", arquivo);
+
+      const resposta = await fetch("/api/upload-xml", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ loteId }),
+        body: formData,
       });
 
-      const json = await resposta.json();
+      const texto = await resposta.text();
 
-      if (!resposta.ok) {
-        throw new Error(json.error || "Erro ao cancelar solicitação.");
+      let dados: any;
+      try {
+        dados = JSON.parse(texto);
+      } catch {
+        throw new Error(texto.slice(0, 200));
       }
 
-      localStorage.removeItem("clienteId");
-      localStorage.removeItem("loteId");
-      localStorage.removeItem("protocolo");
+      if (!resposta.ok) {
+        throw new Error(dados.error || "Erro ao enviar XML");
+      }
 
-      router.push("/");
-    } catch (error) {
       setMensagem(
-        error instanceof Error ? error.message : "Erro ao cancelar solicitação."
+        `XML recebido com sucesso. Status: ${dados.xmlDocumento.statusXml}. Itens do XML: ${dados.totalItensXml}. Divergências encontradas: ${dados.totalDivergencias}.`
       );
-    } finally {
-      setProcessando(false);
-    }
-  }
 
-  if (carregando) {
-    return (
-      <main className="min-h-screen bg-zinc-50 px-6 py-10">
-        <div className="mx-auto max-w-4xl rounded-2xl bg-white p-8 shadow">
-          Carregando conferência...
-        </div>
-      </main>
-    );
+      setArquivo(null);
+
+      setTimeout(() => {
+        router.push("/conferencia-final");
+      }, 1500);
+    } catch (error) {
+      const mensagemErro =
+        error instanceof Error ? error.message : "Erro inesperado";
+      setMensagem(mensagemErro);
+    } finally {
+      setCarregando(false);
+    }
   }
 
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-10">
-      <div className="mx-auto max-w-4xl rounded-2xl bg-white p-8 shadow">
-        <h1 className="text-3xl font-bold text-zinc-900">Conferência final</h1>
+      <div className="mx-auto max-w-3xl rounded-2xl bg-white p-8 shadow">
+        <h1 className="text-3xl font-bold text-zinc-900">Upload do XML</h1>
+        <p className="mt-2 text-sm text-zinc-600">
+          Envie o XML para triagem e conferência.
+        </p>
 
-        {dados && (
-          <>
-            <p className="mt-2 text-sm text-zinc-600">
-              Cliente: <strong>{dados.lote.cliente}</strong>
-            </p>
-
-            <p className="mt-1 text-sm text-zinc-600">
-              Protocolo provisório: <strong>{dados.lote.protocolo}</strong>
-            </p>
-
-            <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              {dados.aviso}
-            </div>
-
-            <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <div className="rounded-xl border p-4">
-                <div className="text-sm text-zinc-500">Itens válidos da planilha</div>
-                <div className="text-2xl font-bold">
-                  {dados.resumo.totalItensPlanilhaValidos}
-                </div>
-              </div>
-
-              <div className="rounded-xl border p-4">
-                <div className="text-sm text-zinc-500">Itens únicos considerados</div>
-                <div className="text-2xl font-bold">
-                  {dados.resumo.totalItensUnicosConsiderados}
-                </div>
-              </div>
-
-              <div className="rounded-xl border p-4">
-                <div className="text-sm text-zinc-500">Itens relacionados ao XML</div>
-                <div className="text-2xl font-bold">
-                  {dados.resumo.totalRelacionadosAoXml}
-                </div>
-              </div>
-
-              <div className="rounded-xl border p-4">
-                <div className="text-sm text-zinc-500">
-                  Itens relacionados com divergência
-                </div>
-                <div className="text-2xl font-bold">
-                  {dados.resumo.totalRelacionadosComDivergencia}
-                </div>
-              </div>
-
-              <div className="rounded-xl border p-4">
-                <div className="text-sm text-zinc-500">
-                  Sem XML, mas com CFOP manual
-                </div>
-                <div className="text-2xl font-bold">
-                  {dados.resumo.totalSemRelacaoComCfopManual}
-                </div>
-              </div>
-
-              <div className="rounded-xl border p-4">
-                <div className="text-sm text-zinc-500">
-                  Sem XML e sem CFOP manual
-                </div>
-                <div className="text-2xl font-bold">
-                  {dados.resumo.totalSemRelacaoSemCfopManual}
-                </div>
-              </div>
-
-              <div className="rounded-xl border p-4">
-                <div className="text-sm text-zinc-500">
-                  Itens aptos para análise
-                </div>
-                <div className="text-2xl font-bold">
-                  {dados.resumo.totalAptosParaAnalise}
-                </div>
-              </div>
-
-              <div className="rounded-xl border p-4">
-                <div className="text-sm text-zinc-500">
-                  Itens com classificação imprecisa
-                </div>
-                <div className="text-2xl font-bold">
-                  {dados.resumo.totalImprecisos}
-                </div>
-              </div>
-
-              <div className="rounded-xl border p-4">
-                <div className="text-sm text-zinc-500">
-                  Itens duplicados consolidados
-                </div>
-                <div className="text-2xl font-bold">
-                  {dados.resumo.totalDuplicadosConsolidados}
-                </div>
-              </div>
-
-              <div className="rounded-xl border p-4">
-                <div className="text-sm text-zinc-500">
-                  Itens encontrados apenas no XML
-                </div>
-                <div className="text-2xl font-bold">
-                  {dados.resumo.totalSomenteNoXml}
-                </div>
-              </div>
-
-              <div className="rounded-xl border p-4">
-                <div className="text-sm text-zinc-500">Divergências de NCM</div>
-                <div className="text-2xl font-bold">
-                  {dados.resumo.totalDivergenciasNcm}
-                </div>
-              </div>
-
-              <div className="rounded-xl border p-4">
-                <div className="text-sm text-zinc-500">
-                  Divergências de descrição
-                </div>
-                <div className="text-2xl font-bold">
-                  {dados.resumo.totalDivergenciasDescricao}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-8 rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-700">
-              O prosseguimento implicará contato para efeito de orçamento apenas
-              dos itens com informações mínimas completas para análise. Itens sem
-              código, descrição, NCM ou CFOP poderão ter classificação imprecisa.
-            </div>
-
-            <div className="mt-8 flex flex-wrap gap-4">
-              <button
-                type="button"
-                onClick={prosseguir}
-                disabled={processando}
-                className="rounded-xl bg-black px-5 py-3 font-medium text-white disabled:opacity-60"
-              >
-                {processando ? "Processando..." : "Prosseguir"}
-              </button>
-
-              <button
-                type="button"
-                onClick={naoProsseguir}
-                disabled={processando}
-                className="rounded-xl border border-zinc-300 px-5 py-3 font-medium text-zinc-700 disabled:opacity-60"
-              >
-                Não prosseguir
-              </button>
-            </div>
-          </>
-        )}
-
-        {mensagem && (
-          <div className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-700">
-            {mensagem}
+        <div className="mt-8 space-y-5">
+          <div>
+            <label className="mb-2 block text-sm font-medium text-zinc-700">
+              Arquivo XML
+            </label>
+            <input
+              type="file"
+              accept=".xml"
+              onChange={(e) => {
+                const arquivoSelecionado = e.target.files?.[0] ?? null;
+                setArquivo(arquivoSelecionado);
+              }}
+              className="w-full rounded-xl border border-zinc-300 px-4 py-3"
+            />
           </div>
-        )}
+
+          <button
+            type="button"
+            onClick={enviarXml}
+            disabled={carregando}
+            className="w-full rounded-xl bg-black px-4 py-3 font-medium text-white disabled:opacity-60"
+          >
+            {carregando ? "Enviando..." : "Enviar XML"}
+          </button>
+
+          {mensagem && (
+            <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
+              {mensagem}
+            </div>
+          )}
+        </div>
       </div>
     </main>
   );

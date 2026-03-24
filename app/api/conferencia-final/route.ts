@@ -5,9 +5,24 @@ function normalizarTexto(valor?: string | null) {
   return String(valor ?? "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function normalizarCodigo(valor?: string | null) {
+  const texto = String(valor ?? "").trim();
+  if (!texto) return "";
+
+  const somenteAlfanumerico = texto.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+  if (!somenteAlfanumerico) return "";
+
+  // versão sem zeros à esquerda no trecho numérico puro
+  if (/^\d+$/.test(somenteAlfanumerico)) {
+    return String(Number(somenteAlfanumerico));
+  }
+
+  return somenteAlfanumerico;
 }
 
 function normalizarDocumento(valor?: string | null) {
@@ -21,20 +36,82 @@ function chaveDuplicidade(item: {
   cfop?: string | null;
 }) {
   return [
-    normalizarTexto(item.codigo),
+    normalizarCodigo(item.codigo),
     normalizarTexto(item.descricao),
     normalizarTexto(item.ncm),
     normalizarTexto(item.cfop),
   ].join("|");
 }
 
-function chaveCodigoDescricao(codigo?: string | null, descricao?: string | null) {
-  const codigoNormalizado = normalizarTexto(codigo);
-  const descricaoNormalizada = normalizarTexto(descricao);
+type ItemPlanilhaResumo = {
+  codigo: string;
+  descricao: string;
+  ncm: string | null;
+  cfopManual: string | null;
+  quantidade: number;
+};
 
-  if (codigoNormalizado) return `COD:${codigoNormalizado}`;
-  if (descricaoNormalizada) return `DESC:${descricaoNormalizada}`;
-  return "";
+type ItemXmlResumo = {
+  codigo: string | null;
+  descricao: string;
+  ncm: string | null;
+  cfop: string | null;
+};
+
+function encontrarItemXmlRelacionado(
+  itemPlanilha: ItemPlanilhaResumo,
+  itensXml: ItemXmlResumo[],
+  usados: Set<number>
+) {
+  const codigoPlanilha = normalizarCodigo(itemPlanilha.codigo);
+  const descricaoPlanilha = normalizarTexto(itemPlanilha.descricao);
+  const ncmPlanilha = normalizarTexto(itemPlanilha.ncm);
+
+  // 1) prioridade por código normalizado
+  if (codigoPlanilha) {
+    for (let i = 0; i < itensXml.length; i++) {
+      if (usados.has(i)) continue;
+
+      const itemXml = itensXml[i];
+      const codigoXml = normalizarCodigo(itemXml.codigo);
+
+      if (codigoXml && codigoXml === codigoPlanilha) {
+        return { itemXml, indice: i, criterio: "CODIGO" as const };
+      }
+    }
+  }
+
+  // 2) fallback por descrição + NCM
+  for (let i = 0; i < itensXml.length; i++) {
+    if (usados.has(i)) continue;
+
+    const itemXml = itensXml[i];
+    const descricaoXml = normalizarTexto(itemXml.descricao);
+    const ncmXml = normalizarTexto(itemXml.ncm);
+
+    const descricaoBate =
+      descricaoPlanilha && descricaoXml && descricaoPlanilha === descricaoXml;
+
+    const ncmBate = ncmPlanilha && ncmXml && ncmPlanilha === ncmXml;
+
+    if (descricaoBate && ncmBate) {
+      return { itemXml, indice: i, criterio: "DESCRICAO_NCM" as const };
+    }
+  }
+
+  // 3) fallback mais fraco: descrição igual
+  for (let i = 0; i < itensXml.length; i++) {
+    if (usados.has(i)) continue;
+
+    const itemXml = itensXml[i];
+    const descricaoXml = normalizarTexto(itemXml.descricao);
+
+    if (descricaoPlanilha && descricaoXml && descricaoPlanilha === descricaoXml) {
+      return { itemXml, indice: i, criterio: "DESCRICAO" as const };
+    }
+  }
+
+  return null;
 }
 
 export async function POST(req: NextRequest) {
@@ -56,7 +133,6 @@ export async function POST(req: NextRequest) {
         itensPlanilha: {
           orderBy: { linhaOrigem: "asc" },
         },
-        divergenciasXmlPlanilha: true,
         xmlDocumentos: {
           where: {
             statusXml: {
@@ -78,19 +154,17 @@ export async function POST(req: NextRequest) {
     }
 
     const itensPlanilhaValidos = lote.itensPlanilha.filter((item) => item.linhaValida);
-    const itensXmlRelacionados = lote.xmlDocumentos.flatMap((doc) => doc.itensXml);
+    const itensXmlRelacionados: ItemXmlResumo[] = lote.xmlDocumentos.flatMap((doc) =>
+      doc.itensXml.map((item) => ({
+        codigo: item.codigoItem,
+        descricao: item.descricaoItem,
+        ncm: item.ncm,
+        cfop: item.cfop,
+      }))
+    );
 
-    // Consolidar duplicados da planilha
-    const mapaItensUnicos = new Map<
-      string,
-      {
-        codigo: string;
-        descricao: string;
-        ncm: string | null;
-        cfopManual: string | null;
-        quantidade: number;
-      }
-    >();
+    // Consolidação de duplicados da planilha
+    const mapaItensUnicos = new Map<string, ItemPlanilhaResumo>();
 
     for (const item of itensPlanilhaValidos) {
       const chave = chaveDuplicidade({
@@ -116,33 +190,6 @@ export async function POST(req: NextRequest) {
     const itensUnicosPlanilha = Array.from(mapaItensUnicos.values());
     const itensDuplicados = itensUnicosPlanilha.filter((item) => item.quantidade > 1);
 
-    // Mapa XML por código/descrição
-    const mapaXml = new Map<
-      string,
-      {
-        codigo: string | null;
-        descricao: string;
-        ncm: string | null;
-        cfop: string | null;
-      }[]
-    >();
-
-    for (const itemXml of itensXmlRelacionados) {
-      const chave = chaveCodigoDescricao(itemXml.codigoItem, itemXml.descricaoItem);
-      if (!chave) continue;
-
-      if (!mapaXml.has(chave)) {
-        mapaXml.set(chave, []);
-      }
-
-      mapaXml.get(chave)!.push({
-        codigo: itemXml.codigoItem,
-        descricao: itemXml.descricaoItem,
-        ncm: itemXml.ncm,
-        cfop: itemXml.cfop,
-      });
-    }
-
     let totalRelacionadosAoXml = 0;
     let totalRelacionadosComDivergencia = 0;
     let totalSemRelacaoComCfopManual = 0;
@@ -152,58 +199,46 @@ export async function POST(req: NextRequest) {
     let totalDivergenciasNcm = 0;
     let totalDivergenciasDescricao = 0;
 
-    const chavesXmlEncontradasNaPlanilha = new Set<string>();
+    const xmlUsados = new Set<number>();
 
     for (const item of itensUnicosPlanilha) {
-      const chavePrincipal = chaveCodigoDescricao(item.codigo, item.descricao);
-      const chaveDescricao = item.descricao
-        ? `DESC:${normalizarTexto(item.descricao)}`
-        : "";
+      const match = encontrarItemXmlRelacionado(item, itensXmlRelacionados, xmlUsados);
 
-      const candidatos =
-        (chavePrincipal && mapaXml.get(chavePrincipal)) ||
-        (chaveDescricao && mapaXml.get(chaveDescricao)) ||
-        [];
+      let possuiRelacaoXml = false;
+      let descricaoDivergente = false;
+      let ncmDivergente = false;
+      let cfopEfetivo: string | null = item.cfopManual || null;
 
-      const possuiRelacaoXml = candidatos.length > 0;
-      const itemXmlRef = possuiRelacaoXml ? candidatos[0] : null;
-
-      if (itemXmlRef) {
-        const chaveXml = chaveCodigoDescricao(itemXmlRef.codigo, itemXmlRef.descricao);
-        if (chaveXml) {
-          chavesXmlEncontradasNaPlanilha.add(chaveXml);
-        }
-      }
-
-      const descricaoDivergente =
-        !!itemXmlRef &&
-        normalizarTexto(item.descricao) !== normalizarTexto(itemXmlRef.descricao);
-
-      const ncmDivergente =
-        !!itemXmlRef &&
-        !!item.ncm &&
-        !!itemXmlRef.ncm &&
-        normalizarTexto(item.ncm) !== normalizarTexto(itemXmlRef.ncm);
-
-      const temDivergencia = descricaoDivergente || ncmDivergente;
-
-      if (descricaoDivergente) totalDivergenciasDescricao += 1;
-      if (ncmDivergente) totalDivergenciasNcm += 1;
-
-      const cfopEfetivo = itemXmlRef?.cfop || item.cfopManual || null;
-
-      const possuiMinimos = Boolean(
-        item.codigo &&
-          item.descricao &&
-          item.ncm &&
-          cfopEfetivo
-      );
-
-      if (possuiRelacaoXml) {
+      if (match) {
+        possuiRelacaoXml = true;
+        xmlUsados.add(match.indice);
         totalRelacionadosAoXml += 1;
-        if (temDivergencia) {
+
+        const itemXml = match.itemXml;
+
+        const descricaoPlanilhaNorm = normalizarTexto(item.descricao);
+        const descricaoXmlNorm = normalizarTexto(itemXml.descricao);
+        const ncmPlanilhaNorm = normalizarTexto(item.ncm);
+        const ncmXmlNorm = normalizarTexto(itemXml.ncm);
+
+        descricaoDivergente =
+          !!descricaoPlanilhaNorm &&
+          !!descricaoXmlNorm &&
+          descricaoPlanilhaNorm !== descricaoXmlNorm;
+
+        ncmDivergente =
+          !!ncmPlanilhaNorm &&
+          !!ncmXmlNorm &&
+          ncmPlanilhaNorm !== ncmXmlNorm;
+
+        if (descricaoDivergente) totalDivergenciasDescricao += 1;
+        if (ncmDivergente) totalDivergenciasNcm += 1;
+
+        if (descricaoDivergente || ncmDivergente) {
           totalRelacionadosComDivergencia += 1;
         }
+
+        cfopEfetivo = itemXml.cfop || item.cfopManual || null;
       } else {
         if (item.cfopManual) {
           totalSemRelacaoComCfopManual += 1;
@@ -212,38 +247,21 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      if (possuiMinimos) {
+      const possuiDadosMinimos = Boolean(
+        item.codigo &&
+          item.descricao &&
+          item.ncm &&
+          cfopEfetivo
+      );
+
+      if (possuiDadosMinimos) {
         totalAptosParaAnalise += 1;
       } else {
         totalImprecisos += 1;
       }
     }
 
-    // Itens que estão só no XML
-    let totalSomenteNoXml = 0;
-
-    for (const itemXml of itensXmlRelacionados) {
-      const chaveXml = chaveCodigoDescricao(itemXml.codigoItem, itemXml.descricaoItem);
-      const chaveDescricaoXml = itemXml.descricaoItem
-        ? `DESC:${normalizarTexto(itemXml.descricaoItem)}`
-        : "";
-
-      const apareceuNaPlanilha = itensUnicosPlanilha.some((itemPlanilha) => {
-        const chavePlanilha = chaveCodigoDescricao(itemPlanilha.codigo, itemPlanilha.descricao);
-        const chaveDescricaoPlanilha = itemPlanilha.descricao
-          ? `DESC:${normalizarTexto(itemPlanilha.descricao)}`
-          : "";
-
-        return (
-          (!!chaveXml && chavePlanilha === chaveXml) ||
-          (!!chaveDescricaoXml && chaveDescricaoPlanilha === chaveDescricaoXml)
-        );
-      });
-
-      if (!apareceuNaPlanilha) {
-        totalSomenteNoXml += 1;
-      }
-    }
+    const totalSomenteNoXml = itensXmlRelacionados.length - xmlUsados.size;
 
     return NextResponse.json({
       ok: true,

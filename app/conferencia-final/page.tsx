@@ -99,6 +99,25 @@ export default function ConferenciaFinalPage() {
         throw new Error(json.error || "Erro ao confirmar solicitação.");
       }
 
+      if (!json.emailClienteEnviado || !json.emailSuporteEnviado) {
+        const partes: string[] = [];
+
+        if (!json.emailClienteEnviado) {
+          partes.push(
+            `E-mail do cliente não enviado: ${json.emailClienteErro || "sem detalhe"}`
+          );
+        }
+
+        if (!json.emailSuporteEnviado) {
+          partes.push(
+            `E-mail do suporte não enviado: ${json.emailSuporteErro || "sem detalhe"}`
+          );
+        }
+
+        setMensagem(partes.join(" | "));
+        return;
+      }
+
       router.push("/resumo");
     } catch (error) {
       setMensagem(
@@ -309,7 +328,7 @@ export default function ConferenciaFinalPage() {
         )}
 
         {mensagem && (
-          <div className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-700">
+          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {mensagem}
           </div>
         )}
