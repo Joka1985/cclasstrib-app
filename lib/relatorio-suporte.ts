@@ -117,7 +117,7 @@ export async function gerarPlanilhaRelatorioAnalitico(
     { campo: "Modo da documentação", valor: dados.modoDocumentacao },
     { campo: "Itens válidos da planilha", valor: dados.resumo.totalItensPlanilhaValidos },
     { campo: "Itens únicos considerados", valor: dados.resumo.totalItensUnicosConsiderados },
-    { campo: "Relacionados ao XML", value: undefined as any, valor: dados.resumo.totalRelacionadosAoXml },
+    { campo: "Relacionados ao XML", valor: dados.resumo.totalRelacionadosAoXml },
     { campo: "Relacionados com divergência", valor: dados.resumo.totalRelacionadosComDivergencia },
     { campo: "Sem XML com CFOP manual", valor: dados.resumo.totalSemRelacaoComCfopManual },
     { campo: "Sem XML sem CFOP manual", valor: dados.resumo.totalSemRelacaoSemCfopManual },

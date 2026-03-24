@@ -9,42 +9,37 @@ function normalizar(valor: string) {
     .trim();
 }
 
-function somenteNumeros(valor: string) {
-  return valor.replace(/\D/g, "");
-}
-
 export async function GET(req: NextRequest) {
   try {
-    const termo = req.nextUrl.searchParams.get("q")?.trim() ?? "";
+    const termo = req.nextUrl.searchParams.get("q") ?? "";
+    const termoNormalizado = normalizar(termo);
 
-    if (!termo) {
-      return NextResponse.json({ ok: true, resultados: [] });
+    if (!termoNormalizado) {
+      return NextResponse.json({
+        ok: true,
+        resultados: [],
+      });
     }
 
-    const termoNormalizado = normalizar(termo);
-    const termoNumerico = somenteNumeros(termo);
-
     const resultados = CNAES.filter((item) => {
-      const codigoNormalizado = normalizar(item.codigo);
-      const descricaoNormalizada = normalizar(item.descricao);
-      const codigoNumerico = somenteNumeros(item.codigo);
+      const codigo = normalizar(item.codigo);
+      const descricao = normalizar(item.descricao);
 
       return (
-        codigoNormalizado.includes(termoNormalizado) ||
-        descricaoNormalizada.includes(termoNormalizado) ||
-        (termoNumerico.length > 0 && codigoNumerico.includes(termoNumerico))
+        codigo.includes(termoNormalizado) ||
+        descricao.includes(termoNormalizado)
       );
-    }).slice(0, 10);
+    }).slice(0, 20);
 
     return NextResponse.json({
       ok: true,
       resultados,
     });
   } catch (error) {
-    console.error("Erro ao consultar CNAE:", error);
+    console.error("Erro ao consultar CNAEs:", error);
 
     return NextResponse.json(
-      { ok: false, error: "Erro ao consultar CNAE." },
+      { ok: false, error: "Erro ao consultar a base oficial de CNAE." },
       { status: 500 }
     );
   }
