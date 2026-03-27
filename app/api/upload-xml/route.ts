@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { XMLParser } from "fast-xml-parser";
+import AdmZip, { IZipEntry } from "adm-zip";
 
 function limparDocumento(valor?: string) {
   return String(valor ?? "").replace(/\D/g, "");
@@ -32,6 +33,435 @@ function chaveCodigoDescricao(codigo?: string | null, descricao?: string | null)
   if (codigoNormalizado) return `COD:${codigoNormalizado}`;
   if (descricaoNormalizada) return `DESC:${descricaoNormalizada}`;
   return "";
+}
+
+function nomeEhXml(nome?: string | null) {
+  return String(nome ?? "").toLowerCase().endsWith(".xml");
+}
+
+function nomeEhZip(nome?: string | null) {
+  return String(nome ?? "").toLowerCase().endsWith(".zip");
+}
+
+function nomeEhRar(nome?: string | null) {
+  return String(nome ?? "").toLowerCase().endsWith(".rar");
+}
+
+function montarParserXml() {
+  return new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: "",
+    removeNSPrefix: true,
+  });
+}
+
+async function extrairXmlsDeZip(buffer: Buffer) {
+  const zip = new AdmZip(buffer);
+  const entradas = zip.getEntries();
+
+  const xmls = entradas
+    .filter((entry: IZipEntry) => !entry.isDirectory && nomeEhXml(entry.entryName))
+    .map((entry: IZipEntry) => ({
+      nomeArquivo: entry.entryName,
+      conteudoXml: entry.getData().toString("utf-8"),
+    }))
+    .filter(
+      (item: { nomeArquivo: string; conteudoXml: string }) =>
+        item.conteudoXml.trim().length > 0
+    );
+
+  if (!xmls.length) {
+    throw new Error("O arquivo ZIP não contém XMLs válidos.");
+  }
+
+  return xmls;
+}
+
+async function extrairXmlsDeRar(buffer: Buffer) {
+  const unrarModule: any = await import("node-unrar-js");
+  const createExtractorFromData =
+    unrarModule.createExtractorFromData ??
+    unrarModule.default?.createExtractorFromData;
+
+  if (!createExtractorFromData) {
+    throw new Error("Não foi possível carregar o extrator de RAR.");
+  }
+
+  const extractor = await createExtractorFromData({
+    data: Uint8Array.from(buffer),
+  });
+
+  const listaResultado = extractor.getFileList();
+  const estadoLista = Array.isArray(listaResultado) ? listaResultado[0] : null;
+  const listaArquivos = Array.isArray(listaResultado)
+    ? listaResultado[1]?.fileHeaders ?? []
+    : [];
+
+  if (!estadoLista || estadoLista.state !== "SUCCESS") {
+    throw new Error("Não foi possível ler o conteúdo do arquivo RAR.");
+  }
+
+  const nomesXml = listaArquivos
+    .map((header: any) => header?.name)
+    .filter((nome: string | undefined) => !!nome && nomeEhXml(nome));
+
+  if (!nomesXml.length) {
+    throw new Error("O arquivo RAR não contém XMLs válidos.");
+  }
+
+  const extracaoResultado = extractor.extract({
+    files: nomesXml,
+  });
+
+  const estadoExtracao = Array.isArray(extracaoResultado)
+    ? extracaoResultado[0]
+    : null;
+  const arquivosExtraidos = Array.isArray(extracaoResultado)
+    ? extracaoResultado[1]?.files ?? []
+    : [];
+
+  if (!estadoExtracao || estadoExtracao.state !== "SUCCESS") {
+    throw new Error("Não foi possível extrair os XMLs do arquivo RAR.");
+  }
+
+  const xmls = arquivosExtraidos
+    .map((arquivo: any) => {
+      const nomeArquivo =
+        arquivo?.fileHeader?.name ?? arquivo?.fileHeader?.filename ?? "";
+      const bytes =
+        arquivo?.extraction instanceof Uint8Array
+          ? arquivo.extraction
+          : arquivo?.extraction?.buffer instanceof ArrayBuffer
+            ? new Uint8Array(arquivo.extraction.buffer)
+            : null;
+
+      return {
+        nomeArquivo,
+        conteudoXml: bytes ? Buffer.from(bytes).toString("utf-8") : "",
+      };
+    })
+    .filter(
+      (item: { nomeArquivo: string; conteudoXml: string }) =>
+        nomeEhXml(item.nomeArquivo) && item.conteudoXml.trim().length > 0
+    );
+
+  if (!xmls.length) {
+    throw new Error("Os arquivos extraídos do RAR não continham XML legível.");
+  }
+
+  return xmls;
+}
+
+async function extrairXmlsDoArquivo(arquivo: File) {
+  const nome = arquivo.name || "";
+
+  if (nomeEhXml(nome)) {
+    const texto = await arquivo.text();
+    return [
+      {
+        nomeArquivo: nome,
+        conteudoXml: texto,
+      },
+    ];
+  }
+
+  const bytes = Buffer.from(await arquivo.arrayBuffer());
+
+  if (nomeEhZip(nome)) {
+    return extrairXmlsDeZip(bytes);
+  }
+
+  if (nomeEhRar(nome)) {
+    return extrairXmlsDeRar(bytes);
+  }
+
+  throw new Error("Formato inválido. Envie um arquivo .xml, .zip ou .rar.");
+}
+
+async function processarUmXml(params: {
+  loteId: string;
+  clienteCpfCnpj: string;
+  conteudoXml: string;
+}) {
+  const parser = montarParserXml();
+  const xml = parser.parse(params.conteudoXml);
+
+  const nfeProc = xml?.nfeProc || xml?.procNFe;
+  const nfe = nfeProc?.NFe || xml?.NFe;
+  const infNFe = nfe?.infNFe;
+
+  const cfe = xml?.CFe;
+  const infCFe = cfe?.infCFe;
+
+  const documentoFiscal = infNFe || infCFe;
+
+  if (!documentoFiscal) {
+    throw new Error(
+      "Estrutura de XML não reconhecida. Envie NF-e/NFC-e (NFe/infNFe) ou CF-e SAT (CFe/infCFe)."
+    );
+  }
+
+  const emit = primeiroValor(documentoFiscal.emit);
+  const dest = primeiroValor(documentoFiscal.dest);
+  const ide = primeiroValor(documentoFiscal.ide);
+  const dets = paraArray(documentoFiscal.det);
+
+  const emitenteCpfCnpj = limparDocumento(emit?.CNPJ || emit?.CPF);
+  const destinatarioCpfCnpj = limparDocumento(dest?.CNPJ || dest?.CPF);
+  const documentoCliente = limparDocumento(params.clienteCpfCnpj);
+
+  let statusXml: "SAIDA" | "ENTRADA" | "NAO_RELACIONADO" | "INVALIDO" =
+    "INVALIDO";
+
+  if (emitenteCpfCnpj === documentoCliente) {
+    statusXml = "SAIDA";
+  } else if (destinatarioCpfCnpj === documentoCliente) {
+    statusXml = "ENTRADA";
+  } else {
+    statusXml = "NAO_RELACIONADO";
+  }
+
+  const tipoDocumento = infCFe ? "OUTRO" : "NFE";
+
+  const chaveDocumento = documentoFiscal?.Id
+    ? String(documentoFiscal.Id).replace(/^NFe/, "").replace(/^CFe/, "")
+    : null;
+
+  const dataEmissao = ide?.dhEmi
+    ? new Date(ide.dhEmi)
+    : ide?.dEmi
+      ? new Date(
+          String(ide.dEmi).length === 8
+            ? `${String(ide.dEmi).slice(0, 4)}-${String(ide.dEmi).slice(4, 6)}-${String(
+                ide.dEmi
+              ).slice(6, 8)}`
+            : ide.dEmi
+        )
+      : null;
+
+  const xmlDocumento = await prisma.xmlDocumento.create({
+    data: {
+      loteId: params.loteId,
+      tipoDocumento,
+      chaveDocumento,
+      emitenteCpfCnpj,
+      emitenteNome: emit?.xNome ?? emit?.xFant ?? null,
+      destinatarioCpfCnpj: destinatarioCpfCnpj || null,
+      destinatarioNome: dest?.xNome ?? null,
+      dataEmissao,
+      statusXml,
+    },
+  });
+
+  const itensXmlParaSalvar = dets.map((det: any, index: number) => {
+    const prod = primeiroValor(det?.prod);
+
+    const quantidade = prod?.qCom ? Number(prod.qCom) : null;
+    const valorUnitario = prod?.vUnCom ? Number(prod.vUnCom) : null;
+    const valorTotal = prod?.vProd ? Number(prod.vProd) : null;
+
+    return {
+      xmlDocumentoId: xmlDocumento.id,
+      numeroItem: Number(det?.nItem ?? index + 1),
+      codigoItem: prod?.cProd ? String(prod.cProd) : null,
+      descricaoItem: prod?.xProd ? String(prod.xProd) : "",
+      ncm: prod?.NCM ? String(prod.NCM) : null,
+      cfop: prod?.CFOP ? String(prod.CFOP) : null,
+      quantidade,
+      valorUnitario,
+      valorTotal,
+    };
+  });
+
+  if (itensXmlParaSalvar.length > 0) {
+    await prisma.itemXml.createMany({
+      data: itensXmlParaSalvar,
+    });
+  }
+
+  return {
+    xmlDocumento,
+    totalItensXml: itensXmlParaSalvar.length,
+  };
+}
+
+async function recalcularDivergencias(loteId: string) {
+  await prisma.divergenciaXmlPlanilha.deleteMany({
+    where: { loteId },
+  });
+
+  const itensPlanilha = await prisma.itemPlanilha.findMany({
+    where: {
+      loteId,
+      linhaValida: true,
+    },
+    orderBy: { linhaOrigem: "asc" },
+  });
+
+  const xmlsRelacionados = await prisma.xmlDocumento.findMany({
+    where: {
+      loteId,
+      statusXml: {
+        in: ["SAIDA", "ENTRADA"],
+      },
+    },
+    include: {
+      itensXml: true,
+    },
+  });
+
+  const itensXmlRelacionados = xmlsRelacionados.flatMap((doc) => doc.itensXml);
+
+  const divergencias: Array<{
+    loteId: string;
+    codigoPlanilha?: string | null;
+    codigoXml?: string | null;
+    descricaoPlanilha?: string | null;
+    descricaoXml?: string | null;
+    tipoDivergencia: string;
+    observacao?: string | null;
+  }> = [];
+
+  const mapaXml = new Map<
+    string,
+    {
+      codigoItem: string | null;
+      descricaoItem: string;
+      ncm: string | null;
+      cfop: string | null;
+    }[]
+  >();
+
+  for (const item of itensXmlRelacionados) {
+    const chave = chaveCodigoDescricao(item.codigoItem, item.descricaoItem);
+    if (!chave) continue;
+
+    if (!mapaXml.has(chave)) {
+      mapaXml.set(chave, []);
+    }
+
+    mapaXml.get(chave)!.push({
+      codigoItem: item.codigoItem,
+      descricaoItem: item.descricaoItem,
+      ncm: item.ncm,
+      cfop: item.cfop,
+    });
+  }
+
+  for (const itemPlanilha of itensPlanilha) {
+    const chavePrincipal = chaveCodigoDescricao(
+      itemPlanilha.codigoItemOuServico,
+      itemPlanilha.descricaoItemOuServico
+    );
+
+    const chaveDescricao = itemPlanilha.descricaoItemOuServico
+      ? `DESC:${normalizarTexto(itemPlanilha.descricaoItemOuServico)}`
+      : "";
+
+    const candidatos =
+      (chavePrincipal && mapaXml.get(chavePrincipal)) ||
+      (chaveDescricao && mapaXml.get(chaveDescricao)) ||
+      [];
+
+    if (candidatos.length === 0) {
+      divergencias.push({
+        loteId,
+        codigoPlanilha: itemPlanilha.codigoItemOuServico,
+        descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
+        tipoDivergencia: "ITEM_PLANILHA_NAO_ENCONTRADO_NO_XML",
+        observacao: itemPlanilha.cfopInformadoManual
+          ? `Item sem correlação em XML relacionado. CFOP manual informado pelo cliente: ${itemPlanilha.cfopInformadoManual}.`
+          : "Item sem correlação em XML relacionado e sem CFOP manual informado.",
+      });
+      continue;
+    }
+
+    const itemXmlRef = candidatos[0];
+
+    const descricaoPlanilhaNormalizada = normalizarTexto(
+      itemPlanilha.descricaoItemOuServico
+    );
+    const descricaoXmlNormalizada = normalizarTexto(itemXmlRef.descricaoItem);
+
+    if (
+      descricaoPlanilhaNormalizada &&
+      descricaoXmlNormalizada &&
+      descricaoPlanilhaNormalizada !== descricaoXmlNormalizada
+    ) {
+      divergencias.push({
+        loteId,
+        codigoPlanilha: itemPlanilha.codigoItemOuServico,
+        codigoXml: itemXmlRef.codigoItem,
+        descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
+        descricaoXml: itemXmlRef.descricaoItem,
+        tipoDivergencia: "DESCRICAO_DIVERGENTE",
+        observacao:
+          "Descrição da planilha difere da descrição encontrada no XML.",
+      });
+    }
+
+    if (
+      itemPlanilha.ncm &&
+      itemXmlRef.ncm &&
+      normalizarTexto(itemPlanilha.ncm) !== normalizarTexto(itemXmlRef.ncm)
+    ) {
+      divergencias.push({
+        loteId,
+        codigoPlanilha: itemPlanilha.codigoItemOuServico,
+        codigoXml: itemXmlRef.codigoItem,
+        descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
+        descricaoXml: itemXmlRef.descricaoItem,
+        tipoDivergencia: "NCM_DIVERGENTE",
+        observacao: `NCM planilha: ${itemPlanilha.ncm}. NCM XML: ${itemXmlRef.ncm}.`,
+      });
+    }
+  }
+
+  for (const itemXml of itensXmlRelacionados) {
+    const chaveXml = chaveCodigoDescricao(
+      itemXml.codigoItem,
+      itemXml.descricaoItem
+    );
+    const chaveDescricaoXml = itemXml.descricaoItem
+      ? `DESC:${normalizarTexto(itemXml.descricaoItem)}`
+      : "";
+
+    const apareceuNaPlanilha = itensPlanilha.some((itemPlanilha) => {
+      const chavePlanilha = chaveCodigoDescricao(
+        itemPlanilha.codigoItemOuServico,
+        itemPlanilha.descricaoItemOuServico
+      );
+      const chaveDescricaoPlanilha = itemPlanilha.descricaoItemOuServico
+        ? `DESC:${normalizarTexto(itemPlanilha.descricaoItemOuServico)}`
+        : "";
+
+      return (
+        (!!chaveXml && chavePlanilha === chaveXml) ||
+        (!!chaveDescricaoXml &&
+          chaveDescricaoPlanilha === chaveDescricaoXml)
+      );
+    });
+
+    if (!apareceuNaPlanilha) {
+      divergencias.push({
+        loteId,
+        codigoXml: itemXml.codigoItem,
+        descricaoXml: itemXml.descricaoItem,
+        tipoDivergencia: "ITEM_XML_NAO_ENCONTRADO_NA_PLANILHA",
+        observacao: itemXml.cfop
+          ? `Item existente no XML com CFOP ${itemXml.cfop}, mas ausente na planilha.`
+          : "Item existente no XML, mas ausente na planilha.",
+      });
+    }
+  }
+
+  if (divergencias.length > 0) {
+    await prisma.divergenciaXmlPlanilha.createMany({
+      data: divergencias,
+    });
+  }
+
+  return divergencias.length;
 }
 
 export async function GET() {
@@ -74,297 +504,44 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const textoXml = await arquivo.text();
+    const xmls = await extrairXmlsDoArquivo(arquivo);
 
-    const parser = new XMLParser({
-      ignoreAttributes: false,
-      attributeNamePrefix: "",
-      removeNSPrefix: true,
-    });
+    let totalItensXml = 0;
+    const documentosCriados: string[] = [];
 
-    const xml = parser.parse(textoXml);
-
-    const nfeProc = xml?.nfeProc || xml?.procNFe;
-    const nfe = nfeProc?.NFe || xml?.NFe;
-    const infNFe = nfe?.infNFe;
-
-    const cfe = xml?.CFe;
-    const infCFe = cfe?.infCFe;
-
-    const documentoFiscal = infNFe || infCFe;
-
-    if (!documentoFiscal) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error:
-            "Estrutura de XML não reconhecida. Envie NF-e/NFC-e (NFe/infNFe) ou CF-e SAT (CFe/infCFe).",
-        },
-        { status: 400 }
-      );
-    }
-
-    const emit = primeiroValor(documentoFiscal.emit);
-    const dest = primeiroValor(documentoFiscal.dest);
-    const ide = primeiroValor(documentoFiscal.ide);
-    const dets = paraArray(documentoFiscal.det);
-
-    const emitenteCpfCnpj = limparDocumento(emit?.CNPJ || emit?.CPF);
-    const destinatarioCpfCnpj = limparDocumento(dest?.CNPJ || dest?.CPF);
-    const documentoCliente = limparDocumento(lote.cliente.cpfCnpj);
-
-    let statusXml: "SAIDA" | "ENTRADA" | "NAO_RELACIONADO" | "INVALIDO" =
-      "INVALIDO";
-
-    if (emitenteCpfCnpj === documentoCliente) {
-      statusXml = "SAIDA";
-    } else if (destinatarioCpfCnpj === documentoCliente) {
-      statusXml = "ENTRADA";
-    } else {
-      statusXml = "NAO_RELACIONADO";
-    }
-
-    const tipoDocumento = infCFe ? "OUTRO" : "NFE";
-
-    const chaveDocumento = documentoFiscal?.Id
-      ? String(documentoFiscal.Id).replace(/^NFe/, "").replace(/^CFe/, "")
-      : null;
-
-    const dataEmissao = ide?.dhEmi
-      ? new Date(ide.dhEmi)
-      : ide?.dEmi
-      ? new Date(
-          String(ide.dEmi).length === 8
-            ? `${String(ide.dEmi).slice(0, 4)}-${String(ide.dEmi).slice(
-                4,
-                6
-              )}-${String(ide.dEmi).slice(6, 8)}`
-            : ide.dEmi
-        )
-      : null;
-
-    const xmlDocumento = await prisma.xmlDocumento.create({
-      data: {
+    for (const item of xmls) {
+      const resultado = await processarUmXml({
         loteId,
-        tipoDocumento,
-        chaveDocumento,
-        emitenteCpfCnpj,
-        emitenteNome: emit?.xNome ?? emit?.xFant ?? null,
-        destinatarioCpfCnpj: destinatarioCpfCnpj || null,
-        destinatarioNome: dest?.xNome ?? null,
-        dataEmissao,
-        statusXml,
-      },
-    });
-
-    const itensXmlParaSalvar = dets.map((det: any, index: number) => {
-      const prod = primeiroValor(det?.prod);
-
-      const quantidade = prod?.qCom ? Number(prod.qCom) : null;
-      const valorUnitario = prod?.vUnCom ? Number(prod.vUnCom) : null;
-      const valorTotal = prod?.vProd ? Number(prod.vProd) : null;
-
-      return {
-        xmlDocumentoId: xmlDocumento.id,
-        numeroItem: Number(det?.nItem ?? index + 1),
-        codigoItem: prod?.cProd ? String(prod.cProd) : null,
-        descricaoItem: prod?.xProd ? String(prod.xProd) : "",
-        ncm: prod?.NCM ? String(prod.NCM) : null,
-        cfop: prod?.CFOP ? String(prod.CFOP) : null,
-        quantidade,
-        valorUnitario,
-        valorTotal,
-      };
-    });
-
-    if (itensXmlParaSalvar.length > 0) {
-      await prisma.itemXml.createMany({
-        data: itensXmlParaSalvar,
-      });
-    }
-
-    await prisma.divergenciaXmlPlanilha.deleteMany({
-      where: { loteId },
-    });
-
-    const itensPlanilha = await prisma.itemPlanilha.findMany({
-      where: {
-        loteId,
-        linhaValida: true,
-      },
-      orderBy: { linhaOrigem: "asc" },
-    });
-
-    const xmlsRelacionados = await prisma.xmlDocumento.findMany({
-      where: {
-        loteId,
-        statusXml: {
-          in: ["SAIDA", "ENTRADA"],
-        },
-      },
-      include: {
-        itensXml: true,
-      },
-    });
-
-    const itensXmlRelacionados = xmlsRelacionados.flatMap((doc) => doc.itensXml);
-
-    const divergencias: Array<{
-      loteId: string;
-      codigoPlanilha?: string | null;
-      codigoXml?: string | null;
-      descricaoPlanilha?: string | null;
-      descricaoXml?: string | null;
-      tipoDivergencia: string;
-      observacao?: string | null;
-    }> = [];
-
-    const mapaXml = new Map<
-      string,
-      {
-        codigoItem: string | null;
-        descricaoItem: string;
-        ncm: string | null;
-        cfop: string | null;
-      }[]
-    >();
-
-    for (const item of itensXmlRelacionados) {
-      const chave = chaveCodigoDescricao(item.codigoItem, item.descricaoItem);
-      if (!chave) continue;
-
-      if (!mapaXml.has(chave)) {
-        mapaXml.set(chave, []);
-      }
-
-      mapaXml.get(chave)!.push({
-        codigoItem: item.codigoItem,
-        descricaoItem: item.descricaoItem,
-        ncm: item.ncm,
-        cfop: item.cfop,
-      });
-    }
-
-    for (const itemPlanilha of itensPlanilha) {
-      const chavePrincipal = chaveCodigoDescricao(
-        itemPlanilha.codigoItemOuServico,
-        itemPlanilha.descricaoItemOuServico
-      );
-
-      const chaveDescricao = itemPlanilha.descricaoItemOuServico
-        ? `DESC:${normalizarTexto(itemPlanilha.descricaoItemOuServico)}`
-        : "";
-
-      const candidatos =
-        (chavePrincipal && mapaXml.get(chavePrincipal)) ||
-        (chaveDescricao && mapaXml.get(chaveDescricao)) ||
-        [];
-
-      if (candidatos.length === 0) {
-        divergencias.push({
-          loteId,
-          codigoPlanilha: itemPlanilha.codigoItemOuServico,
-          descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
-          tipoDivergencia: "ITEM_PLANILHA_NAO_ENCONTRADO_NO_XML",
-          observacao: itemPlanilha.cfopInformadoManual
-            ? `Item sem correlação em XML relacionado. CFOP manual informado pelo cliente: ${itemPlanilha.cfopInformadoManual}.`
-            : "Item sem correlação em XML relacionado e sem CFOP manual informado.",
-        });
-        continue;
-      }
-
-      const itemXmlRef = candidatos[0];
-
-      const descricaoPlanilhaNormalizada = normalizarTexto(
-        itemPlanilha.descricaoItemOuServico
-      );
-      const descricaoXmlNormalizada = normalizarTexto(itemXmlRef.descricaoItem);
-
-      if (
-        descricaoPlanilhaNormalizada &&
-        descricaoXmlNormalizada &&
-        descricaoPlanilhaNormalizada !== descricaoXmlNormalizada
-      ) {
-        divergencias.push({
-          loteId,
-          codigoPlanilha: itemPlanilha.codigoItemOuServico,
-          codigoXml: itemXmlRef.codigoItem,
-          descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
-          descricaoXml: itemXmlRef.descricaoItem,
-          tipoDivergencia: "DESCRICAO_DIVERGENTE",
-          observacao: "Descrição da planilha difere da descrição encontrada no XML.",
-        });
-      }
-
-      if (
-        itemPlanilha.ncm &&
-        itemXmlRef.ncm &&
-        normalizarTexto(itemPlanilha.ncm) !== normalizarTexto(itemXmlRef.ncm)
-      ) {
-        divergencias.push({
-          loteId,
-          codigoPlanilha: itemPlanilha.codigoItemOuServico,
-          codigoXml: itemXmlRef.codigoItem,
-          descricaoPlanilha: itemPlanilha.descricaoItemOuServico,
-          descricaoXml: itemXmlRef.descricaoItem,
-          tipoDivergencia: "NCM_DIVERGENTE",
-          observacao: `NCM planilha: ${itemPlanilha.ncm}. NCM XML: ${itemXmlRef.ncm}.`,
-        });
-      }
-    }
-
-    for (const itemXml of itensXmlRelacionados) {
-      const chaveXml = chaveCodigoDescricao(itemXml.codigoItem, itemXml.descricaoItem);
-      const chaveDescricaoXml = itemXml.descricaoItem
-        ? `DESC:${normalizarTexto(itemXml.descricaoItem)}`
-        : "";
-
-      const apareceuNaPlanilha = itensPlanilha.some((itemPlanilha) => {
-        const chavePlanilha = chaveCodigoDescricao(
-          itemPlanilha.codigoItemOuServico,
-          itemPlanilha.descricaoItemOuServico
-        );
-        const chaveDescricaoPlanilha = itemPlanilha.descricaoItemOuServico
-          ? `DESC:${normalizarTexto(itemPlanilha.descricaoItemOuServico)}`
-          : "";
-
-        return (
-          (!!chaveXml && chavePlanilha === chaveXml) ||
-          (!!chaveDescricaoXml && chaveDescricaoPlanilha === chaveDescricaoXml)
-        );
+        clienteCpfCnpj: lote.cliente.cpfCnpj,
+        conteudoXml: item.conteudoXml,
       });
 
-      if (!apareceuNaPlanilha) {
-        divergencias.push({
-          loteId,
-          codigoXml: itemXml.codigoItem,
-          descricaoXml: itemXml.descricaoItem,
-          tipoDivergencia: "ITEM_XML_NAO_ENCONTRADO_NA_PLANILHA",
-          observacao: itemXml.cfop
-            ? `Item existente no XML com CFOP ${itemXml.cfop}, mas ausente na planilha.`
-            : "Item existente no XML, mas ausente na planilha.",
-        });
-      }
+      totalItensXml += resultado.totalItensXml;
+      documentosCriados.push(resultado.xmlDocumento.id);
     }
 
-    if (divergencias.length > 0) {
-      await prisma.divergenciaXmlPlanilha.createMany({
-        data: divergencias,
-      });
-    }
+    const totalDivergencias = await recalcularDivergencias(loteId);
 
     return NextResponse.json({
       ok: true,
-      mensagem: "XML recebido com sucesso.",
-      xmlDocumento,
-      totalItensXml: itensXmlParaSalvar.length,
-      totalDivergencias: divergencias.length,
+      mensagem:
+        xmls.length > 1
+          ? "Arquivo compactado processado com sucesso."
+          : "XML recebido com sucesso.",
+      totalArquivosXmlProcessados: xmls.length,
+      totalDocumentosCriados: documentosCriados.length,
+      totalItensXml,
+      totalDivergencias,
     });
   } catch (error) {
     console.error("Erro no upload do XML:", error);
 
     return NextResponse.json(
-      { ok: false, error: "Erro ao processar XML" },
+      {
+        ok: false,
+        error:
+          error instanceof Error ? error.message : "Erro ao processar XML",
+      },
       { status: 500 }
     );
   }

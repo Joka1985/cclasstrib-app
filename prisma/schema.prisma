@@ -25,6 +25,8 @@ enum StatusLote {
   PROCESSADO_COM_REVISAO_HUMANA
   ERRO_PROCESSAMENTO
   EMAIL_ENVIADO
+  ORCAMENTO_EXPIRADO
+  CANCELADO_PELO_CLIENTE
 }
 
 enum TipoDocumentoFiscal {
@@ -47,6 +49,92 @@ enum ModoDocumentacao {
   SEM_XML
 }
 
+enum StatusClassificacaoItem {
+  CLASSIFICADO
+  RESSALVA
+  IMPRECISO
+}
+
+enum TipoFonteNormativa {
+  CCLASSTRIB_OFICIAL
+  CST_OFICIAL
+  NCM_BENEFICIO
+  NBS_OFICIAL
+  CREDITO_PRESUMIDO
+  DFE_NT
+  NFSE_NT
+  OUTRA
+}
+
+enum FormatoFonteNormativa {
+  XLSX
+  CSV
+  PDF
+  JSON
+  XML
+  HTML
+  TXT
+}
+
+enum StatusAtualizacaoNormativa {
+  PENDENTE
+  BAIXADO
+  PARSEADO
+  VALIDADO
+  PUBLICADO
+  ERRO
+}
+
+enum TipoMudancaNormativa {
+  INCLUSAO
+  ALTERACAO
+  REVOGACAO
+}
+
+enum SeveridadeAlerta {
+  BAIXA
+  MEDIA
+  ALTA
+  CRITICA
+}
+
+enum OnerosidadeOperacao {
+  ONEROSA
+  NAO_ONEROSA
+  INDETERMINADA
+}
+
+enum TipoResultadoRegra {
+  EXCECAO_DA_EXCECAO
+  EXCECAO
+  REGRA_GERAL
+}
+
+enum StatusDecisaoParametrizacao {
+  FECHADO
+  FECHADO_COM_RESSALVA
+  REVISAR
+  SEM_EVIDENCIA
+}
+
+enum StatusHomologacaoParametrizacao {
+  PENDENTE
+  EM_TESTE
+  HOMOLOGADO
+  REPROVADO
+}
+
+enum TipoDestinatarioOperacao {
+  CONTRIBUINTE
+  NAO_CONTRIBUINTE
+  CONSUMIDOR_FINAL
+  EXTERIOR
+  ORGAO_PUBLICO
+  FILIAL
+  ONG
+  OUTRO
+}
+
 model Cliente {
   id                 String     @id @default(cuid())
   tipoPessoa         TipoPessoa @map("tipo_pessoa")
@@ -59,7 +147,8 @@ model Cliente {
   createdAt          DateTime   @default(now()) @map("created_at")
   updatedAt          DateTime   @updatedAt @map("updated_at")
 
-  lotes Lote[]
+  lotes                    Lote[]
+  resultadosParametrizacao ResultadoParametrizacao[]
 
   @@map("clientes")
 }
@@ -73,19 +162,48 @@ model Lote {
   quantidadeLinhasPlanilha  Int              @default(0) @map("quantidade_linhas_planilha")
   quantidadeLinhasValidas   Int              @default(0) @map("quantidade_linhas_validas")
   quantidadeLinhasInvalidas Int              @default(0) @map("quantidade_linhas_invalidas")
-  valorUnitario             Decimal          @default(0) @map("valor_unitario") @db.Decimal(10, 2)
-  valorTotal                Decimal          @default(0) @map("valor_total") @db.Decimal(12, 2)
-  observacoesInternas       String?          @map("observacoes_internas")
-  createdAt                 DateTime         @default(now()) @map("created_at")
-  updatedAt                 DateTime         @updatedAt @map("updated_at")
 
-  cliente                 Cliente                  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
-  itensPlanilha           ItemPlanilha[]
-  xmlDocumentos           XmlDocumento[]
-  divergenciasXmlPlanilha DivergenciaXmlPlanilha[]
+  itensCobraveis   Int @default(0) @map("itens_cobraveis")
+  itensComRessalva Int @default(0) @map("itens_com_ressalva")
+  itensImprecisos  Int @default(0) @map("itens_imprecisos")
+
+  valorUnitario Decimal @default(0) @map("valor_unitario") @db.Decimal(10, 2)
+  valorTotal    Decimal @default(0) @map("valor_total") @db.Decimal(12, 2)
+
+  observacoesInternas String? @map("observacoes_internas")
+  observacaoOrcamento String? @map("observacao_orcamento")
+
+  dataOrcamentoGerado       DateTime? @map("data_orcamento_gerado")
+  dataOrcamentoEnviado      DateTime? @map("data_orcamento_enviado")
+  dataOrcamentoExpiraEm     DateTime? @map("data_orcamento_expira_em")
+  dataPagamentoConfirmado   DateTime? @map("data_pagamento_confirmado")
+  dataEntregaEnviada        DateTime? @map("data_entrega_enviada")
+  dataCancelamento          DateTime? @map("data_cancelamento")
+  dataProcessamentoIniciado DateTime? @map("data_processamento_iniciado")
+  dataProcessamentoFim      DateTime? @map("data_processamento_fim")
+
+  motivoCancelamento String? @map("motivo_cancelamento")
+  tokenAcaoOrcamento String? @unique @map("token_acao_orcamento")
+
+  arquivoEntregaNome   String? @map("arquivo_entrega_nome")
+  arquivoEntregaBase64 String? @map("arquivo_entrega_base64")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  cliente                  Cliente                      @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  itensPlanilha            ItemPlanilha[]
+  xmlDocumentos            XmlDocumento[]
+  divergenciasXmlPlanilha  DivergenciaXmlPlanilha[]
+  resultadosProcessamento  ResultadoProcessamentoItem[]
+  evidenciasOperacao       EvidenciaOperacao[]
+  filaRevisaoTributaria    FilaRevisaoTributaria[]
+  resultadosParametrizacao ResultadoParametrizacao[]
 
   @@index([clienteId])
   @@index([statusLote])
+  @@index([dataOrcamentoExpiraEm])
+  @@index([tokenAcaoOrcamento])
   @@map("lotes")
 }
 
@@ -103,7 +221,11 @@ model ItemPlanilha {
   createdAt              DateTime @default(now()) @map("created_at")
   updatedAt              DateTime @updatedAt @map("updated_at")
 
-  lote Lote @relation(fields: [loteId], references: [id], onDelete: Cascade)
+  lote                     Lote                         @relation(fields: [loteId], references: [id], onDelete: Cascade)
+  resultadosProcessamento  ResultadoProcessamentoItem[]
+  evidenciasOperacao       EvidenciaOperacao[]
+  filaRevisaoTributaria    FilaRevisaoTributaria[]
+  resultadosParametrizacao ResultadoParametrizacao[]
 
   @@index([loteId])
   @@index([linhaValida])
@@ -146,7 +268,10 @@ model ItemXml {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  xmlDocumento XmlDocumento @relation(fields: [xmlDocumentoId], references: [id], onDelete: Cascade)
+  xmlDocumento             XmlDocumento                 @relation(fields: [xmlDocumentoId], references: [id], onDelete: Cascade)
+  resultadosProcessamento  ResultadoProcessamentoItem[]
+  evidenciasOperacao       EvidenciaOperacao[]
+  resultadosParametrizacao ResultadoParametrizacao[]
 
   @@index([xmlDocumentoId])
   @@index([codigoItem])
@@ -171,4 +296,432 @@ model DivergenciaXmlPlanilha {
   @@index([loteId])
   @@index([tipoDivergencia])
   @@map("divergencias_xml_planilha")
+}
+
+model ResultadoProcessamentoItem {
+  id                     String                  @id @default(cuid())
+  loteId                 String                  @map("lote_id")
+  itemPlanilhaId         String?                 @map("item_planilha_id")
+  itemXmlId              String?                 @map("item_xml_id")
+  linhaOrigem            Int?                    @map("linha_origem")
+  chaveConsolidacao      String                  @map("chave_consolidacao")
+  codigoItem             String?                 @map("codigo_item")
+  descricaoOriginal      String                  @map("descricao_original")
+  descricaoNormalizada   String                  @map("descricao_normalizada")
+  ncmPlanilha            String?                 @map("ncm_planilha")
+  ncmXml                 String?                 @map("ncm_xml")
+  ncmFinal               String?                 @map("ncm_final")
+  nbs                    String?                 @map("nbs")
+  cfopManual             String?                 @map("cfop_manual")
+  cfopXml                String?                 @map("cfop_xml")
+  cfopFinal              String?                 @map("cfop_final")
+  criterioRelacionamento String?                 @map("criterio_relacionamento")
+  possuiRelacaoXml       Boolean                 @default(false) @map("possui_relacao_xml")
+  descricaoDivergente    Boolean                 @default(false) @map("descricao_divergente")
+  ncmDivergente          Boolean                 @default(false) @map("ncm_divergente")
+  quantidadeConsolidada  Int                     @default(1) @map("quantidade_consolidada")
+  aptoAnalise            Boolean                 @default(false) @map("apto_analise")
+  statusClassificacao    StatusClassificacaoItem @map("status_classificacao")
+  cclassTribCodigo       String?                 @map("cclasstrib_codigo")
+  cclassTribDescricao    String?                 @map("cclasstrib_descricao")
+  fundamento             String?                 @map("fundamento")
+  observacoes            String?                 @map("observacoes")
+  confianca              Int                     @default(0)
+  createdAt              DateTime                @default(now()) @map("created_at")
+  updatedAt              DateTime                @updatedAt @map("updated_at")
+
+  lote         Lote          @relation(fields: [loteId], references: [id], onDelete: Cascade)
+  itemPlanilha ItemPlanilha? @relation(fields: [itemPlanilhaId], references: [id], onDelete: SetNull)
+  itemXml      ItemXml?      @relation(fields: [itemXmlId], references: [id], onDelete: SetNull)
+
+  @@index([loteId])
+  @@index([itemPlanilhaId])
+  @@index([itemXmlId])
+  @@index([statusClassificacao])
+  @@index([cclassTribCodigo])
+  @@map("resultados_processamento_itens")
+}
+
+model FonteNormativa {
+  id                    String                @id @default(cuid())
+  codigo                String                @unique
+  nome                  String
+  tipoFonte             TipoFonteNormativa    @map("tipo_fonte")
+  formato               FormatoFonteNormativa
+  urlOficial            String                @map("url_oficial")
+  ativa                 Boolean               @default(true)
+  frequenciaHoras       Int                   @default(24) @map("frequencia_horas")
+  parser                String?
+  descricao             String?
+  ultimaVerificacaoEm   DateTime?             @map("ultima_verificacao_em")
+  ultimaVersaoPublicada String?               @map("ultima_versao_publicada")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+
+  downloads DownloadNormativo[]
+  versoes   VersaoNormativa[]
+  diffs     DiffNormativo[]
+  alertas   AlertaSuporte[]
+
+  @@index([tipoFonte])
+  @@index([ativa])
+  @@map("fontes_normativas")
+}
+
+model DownloadNormativo {
+  id                 String                     @id @default(cuid())
+  fonteNormativaId   String                     @map("fonte_normativa_id")
+  statusAtualizacao  StatusAtualizacaoNormativa @default(PENDENTE) @map("status_atualizacao")
+  urlBaixada         String?                    @map("url_baixada")
+  nomeArquivo        String?                    @map("nome_arquivo")
+  mimeType           String?                    @map("mime_type")
+  hashArquivo        String?                    @map("hash_arquivo")
+  tamanhoBytes       Int?                       @map("tamanho_bytes")
+  dataDeteccao       DateTime                   @default(now()) @map("data_deteccao")
+  dataBaixou         DateTime?                  @map("data_baixou")
+  dataProcessou      DateTime?                  @map("data_processou")
+  mensagemErro       String?                    @map("mensagem_erro")
+  payloadMeta        Json?                      @map("payload_meta")
+  arquivoBrutoBase64 String?                    @map("arquivo_bruto_base64")
+  createdAt          DateTime                   @default(now()) @map("created_at")
+  updatedAt          DateTime                   @updatedAt @map("updated_at")
+
+  fonteNormativa FonteNormativa   @relation(fields: [fonteNormativaId], references: [id], onDelete: Cascade)
+  versao         VersaoNormativa?
+
+  @@index([fonteNormativaId])
+  @@index([statusAtualizacao])
+  @@index([dataDeteccao])
+  @@map("downloads_normativos")
+}
+
+model VersaoNormativa {
+  id                  String                     @id @default(cuid())
+  fonteNormativaId    String                     @map("fonte_normativa_id")
+  downloadNormativoId String?                    @unique @map("download_normativo_id")
+  versaoIdentificada  String                     @map("versao_identificada")
+  statusAtualizacao   StatusAtualizacaoNormativa @default(PARSEADO) @map("status_atualizacao")
+  dataPublicacao      DateTime?                  @map("data_publicacao")
+  dataVigenciaInicio  DateTime?                  @map("data_vigencia_inicio")
+  dataVigenciaFim     DateTime?                  @map("data_vigencia_fim")
+  hashConteudo        String?                    @map("hash_conteudo")
+  resumo              String?
+  payloadResumo       Json?                      @map("payload_resumo")
+  publicada           Boolean                    @default(false)
+  dataPublicada       DateTime?                  @map("data_publicada")
+  createdAt           DateTime                   @default(now()) @map("created_at")
+  updatedAt           DateTime                   @updatedAt @map("updated_at")
+
+  fonteNormativa    FonteNormativa             @relation(fields: [fonteNormativaId], references: [id], onDelete: Cascade)
+  downloadNormativo DownloadNormativo?         @relation(fields: [downloadNormativoId], references: [id], onDelete: SetNull)
+  diffsOrigem       DiffNormativo[]            @relation("VersaoAnterior")
+  diffsDestino      DiffNormativo[]            @relation("VersaoNova")
+  basesOficiais     BaseOficialClassificacao[]
+
+  @@unique([fonteNormativaId, versaoIdentificada])
+  @@index([fonteNormativaId])
+  @@index([publicada])
+  @@map("versoes_normativas")
+}
+
+model DiffNormativo {
+  id                  String               @id @default(cuid())
+  fonteNormativaId    String               @map("fonte_normativa_id")
+  versaoAnteriorId    String?              @map("versao_anterior_id")
+  versaoNovaId        String               @map("versao_nova_id")
+  tipoMudanca         TipoMudancaNormativa @map("tipo_mudanca")
+  chaveRegistro       String               @map("chave_registro")
+  campoAlterado       String?              @map("campo_alterado")
+  valorAnterior       String?              @map("valor_anterior")
+  valorNovo           String?              @map("valor_novo")
+  impacto             String?
+  resumo              String?
+  severidade          SeveridadeAlerta     @default(MEDIA)
+  emailSuporteEnviado Boolean              @default(false) @map("email_suporte_enviado")
+  createdAt           DateTime             @default(now()) @map("created_at")
+  updatedAt           DateTime             @updatedAt @map("updated_at")
+
+  fonteNormativa FonteNormativa   @relation(fields: [fonteNormativaId], references: [id], onDelete: Cascade)
+  versaoAnterior VersaoNormativa? @relation("VersaoAnterior", fields: [versaoAnteriorId], references: [id], onDelete: SetNull)
+  versaoNova     VersaoNormativa  @relation("VersaoNova", fields: [versaoNovaId], references: [id], onDelete: Cascade)
+  alertas        AlertaSuporte[]
+
+  @@index([fonteNormativaId])
+  @@index([versaoNovaId])
+  @@index([tipoMudanca])
+  @@index([emailSuporteEnviado])
+  @@map("diffs_normativos")
+}
+
+model DestinatarioAlerta {
+  id        String   @id @default(cuid())
+  nome      String?
+  email     String   @unique
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  alertas AlertaSuporte[]
+
+  @@index([ativo])
+  @@map("destinatarios_alerta")
+}
+
+model AlertaSuporte {
+  id                   String           @id @default(cuid())
+  fonteNormativaId     String?          @map("fonte_normativa_id")
+  diffNormativoId      String?          @map("diff_normativo_id")
+  destinatarioAlertaId String?          @map("destinatario_alerta_id")
+  severidade           SeveridadeAlerta @default(MEDIA)
+  assunto              String
+  resumo               String
+  payload              Json?
+  emailEnviado         Boolean          @default(false) @map("email_enviado")
+  dataEnvio            DateTime?        @map("data_envio")
+  erroEnvio            String?          @map("erro_envio")
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
+
+  fonteNormativa     FonteNormativa?     @relation(fields: [fonteNormativaId], references: [id], onDelete: SetNull)
+  diffNormativo      DiffNormativo?      @relation(fields: [diffNormativoId], references: [id], onDelete: SetNull)
+  destinatarioAlerta DestinatarioAlerta? @relation(fields: [destinatarioAlertaId], references: [id], onDelete: SetNull)
+
+  @@index([fonteNormativaId])
+  @@index([diffNormativoId])
+  @@index([emailEnviado])
+  @@map("alertas_suporte")
+}
+
+model BaseOficialClassificacao {
+  id                   String    @id @default(cuid())
+  versaoNormativaId    String    @map("versao_normativa_id")
+  cstIbsCbs            String    @map("cst_ibs_cbs")
+  descricaoCst         String?   @map("descricao_cst")
+  cclassTrib           String    @map("cclasstrib")
+  nomeCclassTrib       String    @map("nome_cclasstrib")
+  descricaoCclassTrib  String?   @map("descricao_cclasstrib")
+  lcRedacao            String?   @map("lc_redacao")
+  artigoLc214          String?   @map("artigo_lc214")
+  tipoAliquota         String?   @map("tipo_aliquota")
+  pRedIbs              Decimal?  @map("p_red_ibs") @db.Decimal(8, 4)
+  pRedCbs              Decimal?  @map("p_red_cbs") @db.Decimal(8, 4)
+  indGTribRegular      Boolean   @default(false) @map("ind_g_trib_regular")
+  indGCredPresOper     Boolean   @default(false) @map("ind_g_cred_pres_oper")
+  indGMonoPadrao       Boolean   @default(false) @map("ind_g_mono_padrao")
+  indGMonoReten        Boolean   @default(false) @map("ind_g_mono_reten")
+  indGMonoRet          Boolean   @default(false) @map("ind_g_mono_ret")
+  indGMonoDif          Boolean   @default(false) @map("ind_g_mono_dif")
+  indGEstornoCred      Boolean   @default(false) @map("ind_g_estorno_cred")
+  dIniVig              DateTime? @map("d_ini_vig")
+  dFimVig              DateTime? @map("d_fim_vig")
+  dataAtualizacaoFonte DateTime? @map("data_atualizacao_fonte")
+  indNFe               Boolean   @default(false) @map("ind_nfe")
+  indNFCe              Boolean   @default(false) @map("ind_nfce")
+  indNFSe              Boolean   @default(false) @map("ind_nfse")
+  indCTe               Boolean   @default(false) @map("ind_cte")
+  indNFCom             Boolean   @default(false) @map("ind_nfcom")
+  linkNormativo        String?   @map("link_normativo")
+  anexo                String?
+  hashLinha            String?   @map("hash_linha")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  versaoNormativa          VersaoNormativa           @relation(fields: [versaoNormativaId], references: [id], onDelete: Cascade)
+  regrasExcecao            RegraExcecaoTributaria[]
+  resultadosParametrizacao ResultadoParametrizacao[]
+  cenariosAmbiguidade      CenarioAmbiguidade[]
+
+  @@unique([versaoNormativaId, cstIbsCbs, cclassTrib])
+  @@index([versaoNormativaId])
+  @@index([cclassTrib])
+  @@index([cstIbsCbs])
+  @@map("bases_oficiais_classificacao")
+}
+
+model OperacaoFiscal {
+  id                   String              @id @default(cuid())
+  codigo               String              @unique
+  nomeOperacao         String              @map("nome_operacao")
+  familiaOperacao      String?             @map("familia_operacao")
+  onerosidade          OnerosidadeOperacao
+  descricaoFuncional   String?             @map("descricao_funcional")
+  exigeXml             Boolean             @default(true) @map("exige_xml")
+  exigeEventoPosterior Boolean             @default(false) @map("exige_evento_posterior")
+  exigeDestinatario    Boolean             @default(false) @map("exige_destinatario")
+  ativa                Boolean             @default(true)
+  observacaoTecnica    String?             @map("observacao_tecnica")
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt @map("updated_at")
+
+  evidenciasOperacao       EvidenciaOperacao[]
+  regrasExcecao            RegraExcecaoTributaria[]
+  cenariosAmbiguidade      CenarioAmbiguidade[]
+  resultadosParametrizacao ResultadoParametrizacao[]
+  filaRevisaoTributaria    FilaRevisaoTributaria[]
+
+  @@index([onerosidade])
+  @@index([ativa])
+  @@map("operacoes_fiscais")
+}
+
+model EvidenciaOperacao {
+  id                     String                    @id @default(cuid())
+  loteId                 String                    @map("lote_id")
+  itemPlanilhaId         String?                   @map("item_planilha_id")
+  itemXmlId              String?                   @map("item_xml_id")
+  operacaoFiscalId       String?                   @map("operacao_fiscal_id")
+  cfop                   String?
+  tipoDocumento          TipoDocumentoFiscal?      @map("tipo_documento")
+  chaveDocumento         String?                   @map("chave_documento")
+  destinatarioTipo       TipoDestinatarioOperacao? @map("destinatario_tipo")
+  haContraprestacao      Boolean?                  @map("ha_contraprestacao")
+  dependeEventoPosterior Boolean?                  @map("depende_evento_posterior")
+  constaNoDocumento      Boolean?                  @map("consta_no_documento")
+  origemEvidencia        String?                   @map("origem_evidencia")
+  grauConfianca          Int                       @default(0) @map("grau_confianca")
+  validado               Boolean                   @default(false)
+  observacoes            String?
+  createdAt              DateTime                  @default(now()) @map("created_at")
+  updatedAt              DateTime                  @updatedAt @map("updated_at")
+
+  lote           Lote            @relation(fields: [loteId], references: [id], onDelete: Cascade)
+  itemPlanilha   ItemPlanilha?   @relation(fields: [itemPlanilhaId], references: [id], onDelete: SetNull)
+  itemXml        ItemXml?        @relation(fields: [itemXmlId], references: [id], onDelete: SetNull)
+  operacaoFiscal OperacaoFiscal? @relation(fields: [operacaoFiscalId], references: [id], onDelete: SetNull)
+
+  @@index([loteId])
+  @@index([itemPlanilhaId])
+  @@index([itemXmlId])
+  @@index([operacaoFiscalId])
+  @@map("evidencias_operacao")
+}
+
+model RegraExcecaoTributaria {
+  id                         String                    @id @default(cuid())
+  codigo                     String                    @unique
+  prioridade                 Int
+  nomeRegra                  String                    @map("nome_regra")
+  operacaoFiscalId           String?                   @map("operacao_fiscal_id")
+  resultadoRegra             TipoResultadoRegra        @map("resultado_regra")
+  ramoOnerosidade            OnerosidadeOperacao       @map("ramo_onerosidade")
+  exigeNcm                   Boolean                   @default(false) @map("exige_ncm")
+  ncmInicio                  String?                   @map("ncm_inicio")
+  ncmFim                     String?                   @map("ncm_fim")
+  cfopLista                  String?                   @map("cfop_lista")
+  exigeDestinatarioTipo      Boolean                   @default(false) @map("exige_destinatario_tipo")
+  destinatarioTipo           TipoDestinatarioOperacao? @map("destinatario_tipo")
+  exigeEventoPosterior       Boolean                   @default(false) @map("exige_evento_posterior")
+  exigeConstarDocumento      Boolean                   @default(false) @map("exige_constar_documento")
+  exigeContraprestacao       Boolean?                  @map("exige_contraprestacao")
+  fundamentoLegal            String?                   @map("fundamento_legal")
+  artigoLc214                String?                   @map("artigo_lc214")
+  baseOficialClassificacaoId String?                   @map("base_oficial_classificacao_id")
+  observacoes                String?
+  ativa                      Boolean                   @default(true)
+  inicioVigencia             DateTime?                 @map("inicio_vigencia")
+  fimVigencia                DateTime?                 @map("fim_vigencia")
+  createdAt                  DateTime                  @default(now()) @map("created_at")
+  updatedAt                  DateTime                  @updatedAt @map("updated_at")
+
+  operacaoFiscal           OperacaoFiscal?           @relation(fields: [operacaoFiscalId], references: [id], onDelete: SetNull)
+  baseOficialClassificacao BaseOficialClassificacao? @relation(fields: [baseOficialClassificacaoId], references: [id], onDelete: SetNull)
+
+  @@index([prioridade])
+  @@index([operacaoFiscalId])
+  @@index([ramoOnerosidade])
+  @@index([ativa])
+  @@map("regras_excecao_tributaria")
+}
+
+model CenarioAmbiguidade {
+  id                         String   @id @default(cuid())
+  codigoCenario              String   @unique @map("codigo_cenario")
+  descricaoProdutoCenario    String   @map("descricao_produto_cenario")
+  ncm                        String?
+  operacaoFiscalId           String?  @map("operacao_fiscal_id")
+  cfop                       String?
+  baseOficialClassificacaoId String?  @map("base_oficial_classificacao_id")
+  fundamentacao              String?
+  resultadoEsperado          String?  @map("resultado_esperado")
+  ativo                      Boolean  @default(true)
+  createdAt                  DateTime @default(now()) @map("created_at")
+  updatedAt                  DateTime @updatedAt @map("updated_at")
+
+  operacaoFiscal           OperacaoFiscal?           @relation(fields: [operacaoFiscalId], references: [id], onDelete: SetNull)
+  baseOficialClassificacao BaseOficialClassificacao? @relation(fields: [baseOficialClassificacaoId], references: [id], onDelete: SetNull)
+
+  @@index([operacaoFiscalId])
+  @@index([ncm])
+  @@map("cenarios_ambiguidade")
+}
+
+model ResultadoParametrizacao {
+  id                         String                          @id @default(cuid())
+  loteId                     String                          @map("lote_id")
+  clienteId                  String                          @map("cliente_id")
+  itemPlanilhaId             String?                         @map("item_planilha_id")
+  itemXmlId                  String?                         @map("item_xml_id")
+  operacaoFiscalId           String?                         @map("operacao_fiscal_id")
+  baseOficialClassificacaoId String?                         @map("base_oficial_classificacao_id")
+  codProduto                 String                          @map("cod_produto")
+  descricao                  String
+  ncm                        String?
+  cfop                       String?
+  cst                        String?
+  cclassTrib                 String?                         @map("cclasstrib")
+  descCclassTrib             String?                         @map("desc_cclasstrib")
+  tipoAliquota               String?                         @map("tipo_aliquota")
+  pRedIbs                    Decimal?                        @map("p_red_ibs") @db.Decimal(8, 4)
+  pRedCbs                    Decimal?                        @map("p_red_cbs") @db.Decimal(8, 4)
+  artigoLc214                String?                         @map("artigo_lc214")
+  observacoes                String?
+  responsavel                String?
+  dataReferencia             DateTime?                       @map("data_referencia")
+  statusDecisao              StatusDecisaoParametrizacao     @map("status_decisao")
+  statusHomologacao          StatusHomologacaoParametrizacao @default(PENDENTE) @map("status_homologacao")
+  abaDestino                 String                          @default("PARAMETRIZACAO_FINAL") @map("aba_destino")
+  fundamento                 String?
+  acaoProgramador            String?                         @map("acao_programador")
+  createdAt                  DateTime                        @default(now()) @map("created_at")
+  updatedAt                  DateTime                        @updatedAt @map("updated_at")
+
+  lote                     Lote                      @relation(fields: [loteId], references: [id], onDelete: Cascade)
+  cliente                  Cliente                   @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  itemPlanilha             ItemPlanilha?             @relation(fields: [itemPlanilhaId], references: [id], onDelete: SetNull)
+  itemXml                  ItemXml?                  @relation(fields: [itemXmlId], references: [id], onDelete: SetNull)
+  operacaoFiscal           OperacaoFiscal?           @relation(fields: [operacaoFiscalId], references: [id], onDelete: SetNull)
+  baseOficialClassificacao BaseOficialClassificacao? @relation(fields: [baseOficialClassificacaoId], references: [id], onDelete: SetNull)
+
+  @@index([loteId])
+  @@index([clienteId])
+  @@index([statusDecisao])
+  @@index([abaDestino])
+  @@index([cst])
+  @@index([cclassTrib])
+  @@map("resultados_parametrizacao")
+}
+
+model FilaRevisaoTributaria {
+  id               String                      @id @default(cuid())
+  loteId           String                      @map("lote_id")
+  itemPlanilhaId   String?                     @map("item_planilha_id")
+  operacaoFiscalId String?                     @map("operacao_fiscal_id")
+  motivoRevisao    String                      @map("motivo_revisao")
+  tipoAmbiguidade  String?                     @map("tipo_ambiguidade")
+  dadosFaltantes   String?                     @map("dados_faltantes")
+  sugestaoMotor    String?                     @map("sugestao_motor")
+  statusDecisao    StatusDecisaoParametrizacao @default(REVISAR) @map("status_decisao")
+  responsavel      String?
+  dataAbertura     DateTime                    @default(now()) @map("data_abertura")
+  dataFechamento   DateTime?                   @map("data_fechamento")
+  createdAt        DateTime                    @default(now()) @map("created_at")
+  updatedAt        DateTime                    @updatedAt @map("updated_at")
+
+  lote           Lote            @relation(fields: [loteId], references: [id], onDelete: Cascade)
+  itemPlanilha   ItemPlanilha?   @relation(fields: [itemPlanilhaId], references: [id], onDelete: SetNull)
+  operacaoFiscal OperacaoFiscal? @relation(fields: [operacaoFiscalId], references: [id], onDelete: SetNull)
+
+  @@index([loteId])
+  @@index([statusDecisao])
+  @@map("fila_revisao_tributaria")
 }

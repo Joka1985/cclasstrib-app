@@ -3,6 +3,16 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+type RespostaUploadXml = {
+  ok: boolean;
+  mensagem?: string;
+  error?: string;
+  totalArquivosXmlProcessados?: number;
+  totalDocumentosCriados?: number;
+  totalItensXml?: number;
+  totalDivergencias?: number;
+};
+
 export default function UploadXmlPage() {
   const router = useRouter();
 
@@ -31,7 +41,7 @@ export default function UploadXmlPage() {
     }
 
     if (!arquivo) {
-      setMensagem("Selecione um XML antes de enviar.");
+      setMensagem("Selecione um arquivo antes de enviar.");
       return;
     }
 
@@ -49,26 +59,30 @@ export default function UploadXmlPage() {
 
       const texto = await resposta.text();
 
-      let dados: any;
+      let dados: RespostaUploadXml;
       try {
         dados = JSON.parse(texto);
       } catch {
-        throw new Error(texto.slice(0, 200));
+        throw new Error(texto.slice(0, 300));
       }
 
-      if (!resposta.ok) {
-        throw new Error(dados.error || "Erro ao enviar XML");
+      if (!resposta.ok || !dados.ok) {
+        throw new Error(dados.error || "Erro ao enviar XML.");
       }
 
-      setMensagem(
-        `XML recebido com sucesso. Status: ${dados.xmlDocumento.statusXml}. Itens do XML: ${dados.totalItensXml}. Divergências encontradas: ${dados.totalDivergencias}.`
-      );
+      const mensagemFinal =
+        `${dados.mensagem ?? "Arquivo processado com sucesso."} ` +
+        `Arquivos XML processados: ${dados.totalArquivosXmlProcessados ?? 0}. ` +
+        `Documentos criados: ${dados.totalDocumentosCriados ?? 0}. ` +
+        `Itens do XML: ${dados.totalItensXml ?? 0}. ` +
+        `Divergências encontradas: ${dados.totalDivergencias ?? 0}.`;
 
+      setMensagem(mensagemFinal);
       setArquivo(null);
 
       setTimeout(() => {
         router.push("/conferencia-final");
-      }, 1500);
+      }, 1800);
     } catch (error) {
       const mensagemErro =
         error instanceof Error ? error.message : "Erro inesperado";
@@ -93,13 +107,16 @@ export default function UploadXmlPage() {
             </label>
             <input
               type="file"
-              accept=".xml"
+              accept=".xml,.zip,.rar"
               onChange={(e) => {
                 const arquivoSelecionado = e.target.files?.[0] ?? null;
                 setArquivo(arquivoSelecionado);
               }}
               className="w-full rounded-xl border border-zinc-300 px-4 py-3"
             />
+            <p className="mt-2 text-xs text-zinc-500">
+              Formatos aceitos: .xml, .zip e .rar
+            </p>
           </div>
 
           <button
