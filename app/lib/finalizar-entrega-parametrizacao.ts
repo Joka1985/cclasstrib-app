@@ -68,7 +68,6 @@ export async function finalizarEntregaParametrizacao(params: {
       responsavel: item.responsavel,
     }));
 
-  const cenariosAmbiguidade = lote.resultadosParametrizacao
     .filter((item) => item.abaDestino === "CENARIOS_AMBIGUIDADE")
     .map((item) => ({
       codProduto: item.codProduto,
@@ -89,7 +88,6 @@ export async function finalizarEntregaParametrizacao(params: {
   const { nomeArquivo, arquivoBase64 } = gerarArquivoParametrizacaoXlsx({
     protocolo: lote.protocolo ?? lote.id,
     parametrizacaoFinal,
-    cenariosAmbiguidade,
   });
 
   let emailEnviado = false;
