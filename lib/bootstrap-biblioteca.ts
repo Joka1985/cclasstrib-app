@@ -65,6 +65,30 @@ type RegraSeed = {
   observacoes?: string | null;
 };
 
+type RegraAnexoSeed = {
+  anexo: string;
+  descricaoAnexo: string;
+  operacaoCodigo?: string | null;
+  exigeNcm?: boolean;
+  ncmInicio?: string | null;
+  ncmFim?: string | null;
+  palavrasChaveObrigatorias?: string | null;
+  palavrasChaveExcludentes?: string | null;
+  atividadePermitida?: string | null;
+  operacaoPermitida?: string | null;
+  exigeDestinacao?: boolean;
+  destinacao?: string | null;
+  cst: string;
+  cClassTrib: string;
+  tipoAliquota: "ZERO" | "REDUZIDA" | "NORMAL";
+  pRedIbs?: number | null;
+  pRedCbs?: number | null;
+  fundamentoLegal: string;
+  artigoLc214?: string | null;
+  prioridade: number;
+  observacoes?: string | null;
+};
+
 const FONTES_NORMATIVAS: FonteSeed[] = [
   {
     codigo: "CCLASSTRIB_PORTAL_NFE",
@@ -140,7 +164,7 @@ const FONTES_NORMATIVAS: FonteSeed[] = [
     frequenciaHoras: 72,
     parser: "parseAnexosLc214Html",
     descricao:
-      "Anexos da Lei Complementar nº 214, de 16 de janeiro de 2025, com tabelas e listas de apoio para IBS, CBS e IS.",
+      "Anexos da Lei Complementar nº 214, de 2025, com tabelas e listas de apoio para IBS, CBS e IS.",
   },
   {
     codigo: "LC214_PLANALTO_2025",
@@ -151,7 +175,7 @@ const FONTES_NORMATIVAS: FonteSeed[] = [
     frequenciaHoras: 72,
     parser: "parseLc214Html",
     descricao:
-      "Texto integral da Lei Complementar nº 214, de 16 de janeiro de 2025, publicado no Planalto.",
+      "Texto integral da Lei Complementar nº 214, de 2025, publicado no Planalto.",
   },
   {
     codigo: "PORTAL_CLASSIFICACAO_TRIBUTARIA_DFE",
@@ -173,7 +197,7 @@ const FONTES_NORMATIVAS: FonteSeed[] = [
     frequenciaHoras: 168,
     parser: "parseConclaCnaeHtml",
     descricao:
-      "Página da CONCLA/IBGE com apresentação e referências da classificação CNAE, útil como fonte complementar normativa e cadastral.",
+      "Página da CONCLA/IBGE com referências da CNAE para apoio cadastral.",
   },
   {
     codigo: "TABELA_NCM_VIGENTE_20260327",
@@ -206,7 +230,7 @@ const OPERACOES_FISCAIS: OperacaoSeed[] = [
     familiaOperacao: "COMERCIAL",
     onerosidade: "ONEROSA",
     descricaoFuncional:
-      "Venda de mercadoria adquirida ou recebida de terceiros sujeita à substituição tributária, na condição de contribuinte substituído.",
+      "Venda de mercadoria sujeita à substituição tributária na condição de substituído.",
     exigeXml: true,
     exigeEventoPosterior: false,
     exigeDestinatario: false,
@@ -223,7 +247,7 @@ const OPERACOES_FISCAIS: OperacaoSeed[] = [
     exigeEventoPosterior: false,
     exigeDestinatario: true,
     observacaoTecnica:
-      "Operação geralmente vinculada ao ramo de imunidade/não incidência.",
+      "Operação geralmente vinculada ao ramo de imunidade ou não incidência.",
   },
   {
     codigo: "BONIFICACAO",
@@ -245,16 +269,14 @@ const OPERACOES_FISCAIS: OperacaoSeed[] = [
     exigeXml: true,
     exigeEventoPosterior: false,
     exigeDestinatario: true,
-    observacaoTecnica:
-      "Pode depender do destinatário, como ONG ou ente público.",
+    observacaoTecnica: "Pode depender do destinatário, como ONG ou ente público.",
   },
   {
     codigo: "TRANSFERENCIA_FILIAL",
     nomeOperacao: "Transferência para filial",
     familiaOperacao: "LOGISTICA",
     onerosidade: "NAO_ONEROSA",
-    descricaoFuncional:
-      "Movimentação entre estabelecimentos do mesmo grupo.",
+    descricaoFuncional: "Movimentação entre estabelecimentos do mesmo grupo.",
     exigeXml: true,
     exigeEventoPosterior: false,
     exigeDestinatario: true,
@@ -293,7 +315,7 @@ const OPERACOES_FISCAIS: OperacaoSeed[] = [
     exigeXml: true,
     exigeEventoPosterior: false,
     exigeDestinatario: false,
-    observacaoTecnica: "Direciona o item para revisão/ambiguidade.",
+    observacaoTecnica: "Direciona o item para revisão ou ambiguidade.",
   },
 ];
 
@@ -327,7 +349,7 @@ const REGRAS_EXCECAO_BASE: RegraSeed[] = [
     exigeDestinatarioTipo: true,
     destinatarioTipo: "ONG",
     fundamentoLegal:
-      "Doação com hipótese específica de não incidência/imunidade conforme cenário aplicável.",
+      "Doação com hipótese específica de não incidência ou imunidade conforme cenário aplicável.",
     artigoLc214: "Art. 6º, VIII",
     baseCst: "410",
     baseCclassTrib: "410003",
@@ -362,7 +384,7 @@ const REGRAS_EXCECAO_BASE: RegraSeed[] = [
     exigeDestinatarioTipo: true,
     destinatarioTipo: "EXTERIOR",
     fundamentoLegal:
-      "Exportação com tratamento de imunidade/não incidência.",
+      "Exportação com tratamento de imunidade ou não incidência.",
     artigoLc214: "Art. 8º",
     baseCst: "410",
     baseCclassTrib: "410004",
@@ -406,12 +428,119 @@ const REGRAS_EXCECAO_BASE: RegraSeed[] = [
     resultadoRegra: "REGRA_GERAL",
     ramoOnerosidade: "ONEROSA",
     fundamentoLegal:
-      "Regra residual de tributação integral quando não houver exceção ou redução aplicável.",
+      "Regra residual de tributação integral quando não houver exceção específica vencedora.",
     artigoLc214: "Art. 4º",
     baseCst: "000",
     baseCclassTrib: "000001",
+    observacoes: "Usar apenas quando nenhuma regra mais específica vencer.",
+  },
+];
+
+const REGRAS_ANEXO_BASE: RegraAnexoSeed[] = [
+  {
+    anexo: "I",
+    descricaoAnexo: "Cesta básica nacional com alíquota zero",
+    operacaoCodigo: "VENDA_NORMAL",
+    exigeNcm: true,
+    ncmInicio: "04012010",
+    ncmFim: "04012010",
+    palavrasChaveObrigatorias: "LEITE",
+    atividadePermitida: "HIPERMERCADOS|SUPERMERCADOS|ATACADO",
+    operacaoPermitida: "VENDA_NORMAL",
+    cst: "020",
+    cClassTrib: "200003",
+    tipoAliquota: "ZERO",
+    pRedIbs: 100,
+    pRedCbs: 100,
+    fundamentoLegal:
+      "Fornecimento de produtos destinados à alimentação humana relacionados no Anexo I.",
+    artigoLc214: "Art. 127",
+    prioridade: 1,
+    observacoes: "Aplicar somente quando o NCM e a descrição forem compatíveis.",
+  },
+  {
+    anexo: "VII",
+    descricaoAnexo: "Alimentos destinados ao consumo humano com redução de 60%",
+    operacaoCodigo: "VENDA_NORMAL",
+    exigeNcm: true,
+    ncmInicio: "11010010",
+    ncmFim: "11010020",
+    palavrasChaveObrigatorias: "FARINHA,TRIGO",
+    atividadePermitida: "HIPERMERCADOS|SUPERMERCADOS|ATACADO",
+    operacaoPermitida: "VENDA_NORMAL",
+    cst: "200",
+    cClassTrib: "200034",
+    tipoAliquota: "REDUZIDA",
+    pRedIbs: 60,
+    pRedCbs: 60,
+    fundamentoLegal:
+      "Fornecimento dos alimentos destinados ao consumo humano relacionados no Anexo VII.",
+    artigoLc214: "Art. 135",
+    prioridade: 5,
+    observacoes: "Usar para farinha de trigo e misturas correlatas.",
+  },
+  {
+    anexo: "VII",
+    descricaoAnexo: "Alimentos destinados ao consumo humano com redução de 60%",
+    operacaoCodigo: "VENDA_NORMAL",
+    exigeNcm: true,
+    ncmInicio: "07031019",
+    ncmFim: "10089999",
+    palavrasChaveObrigatorias: "BATATA,CEBOLA,BANANA,ARROZ,FEIJAO",
+    atividadePermitida: "HIPERMERCADOS|SUPERMERCADOS|ATACADO",
+    operacaoPermitida: "VENDA_NORMAL",
+    cst: "200",
+    cClassTrib: "200034",
+    tipoAliquota: "REDUZIDA",
+    pRedIbs: 60,
+    pRedCbs: 60,
+    fundamentoLegal:
+      "Fornecimento dos alimentos destinados ao consumo humano relacionados no Anexo VII.",
+    artigoLc214: "Art. 135",
+    prioridade: 6,
     observacoes:
-      "Venda normal sem benefício, imunidade ou exceção específica.",
+      "Regra ampla para alimentos in natura e básicos quando a descrição confirmar consumo humano.",
+  },
+  {
+    anexo: "IX",
+    descricaoAnexo: "Produtos agropecuários e aquícolas com benefício específico",
+    operacaoCodigo: "VENDA_NORMAL",
+    exigeNcm: true,
+    ncmInicio: "11010010",
+    ncmFim: "11010020",
+    palavrasChaveObrigatorias: "TRIGO,FARINHA",
+    atividadePermitida: "ATACADO|INDUSTRIA|COOPERATIVA",
+    operacaoPermitida: "VENDA_NORMAL",
+    cst: "200",
+    cClassTrib: "200090",
+    tipoAliquota: "REDUZIDA",
+    pRedIbs: 60,
+    pRedCbs: 60,
+    fundamentoLegal:
+      "Tratamento do Anexo IX aplicável ao produto conforme contexto operacional específico.",
+    artigoLc214: "Art. 130",
+    prioridade: 20,
+    observacoes:
+      "Só usar quando o contexto não for de fornecimento alimentar varejista ao consumo humano.",
+  },
+  {
+    anexo: "XV",
+    descricaoAnexo: "Demais hipóteses setoriais específicas",
+    operacaoCodigo: "VENDA_NORMAL",
+    exigeNcm: false,
+    palavrasChaveObrigatorias: "SERVICO,INSUMO",
+    atividadePermitida: "INDUSTRIA",
+    operacaoPermitida: "VENDA_NORMAL",
+    cst: "300",
+    cClassTrib: "300001",
+    tipoAliquota: "NORMAL",
+    pRedIbs: null,
+    pRedCbs: null,
+    fundamentoLegal:
+      "Hipótese setorial residual para contextos específicos sem enquadramento anterior.",
+    artigoLc214: "Art. 130",
+    prioridade: 50,
+    observacoes: "Manter baixa prioridade e revisar quando houver base oficial melhor.",
   },
 ];
 
@@ -482,7 +611,7 @@ async function upsertOperacoesFiscais() {
 
 async function buscarBaseOficialPublicada(
   cst: string | null,
-  cclassTrib: string | null
+  cclassTrib: string | null,
 ) {
   if (!cst || !cclassTrib) return null;
 
@@ -520,7 +649,7 @@ async function upsertRegrasExcecao() {
 
     const baseOficial = await buscarBaseOficialPublicada(
       regra.baseCst ?? null,
-      regra.baseCclassTrib ?? null
+      regra.baseCclassTrib ?? null,
     );
 
     await prisma.regraExcecaoTributaria.upsert({
@@ -572,6 +701,91 @@ async function upsertRegrasExcecao() {
   }
 }
 
+async function upsertRegrasAnexoContextual() {
+  for (const regra of REGRAS_ANEXO_BASE) {
+    const operacao = regra.operacaoCodigo
+      ? await prisma.operacaoFiscal.findUnique({
+          where: { codigo: regra.operacaoCodigo },
+          select: { id: true },
+        })
+      : null;
+
+    const baseOficial = await buscarBaseOficialPublicada(
+      regra.cst,
+      regra.cClassTrib,
+    );
+
+    const existente = await prisma.regraAnexoContextual.findFirst({
+      where: {
+        anexo: regra.anexo,
+        descricaoAnexo: regra.descricaoAnexo,
+        operacaoFiscalId: operacao?.id ?? null,
+        prioridade: regra.prioridade,
+      },
+      select: { id: true },
+    });
+
+    if (existente) {
+      await prisma.regraAnexoContextual.update({
+        where: { id: existente.id },
+        data: {
+          anexo: regra.anexo,
+          descricaoAnexo: regra.descricaoAnexo,
+          operacaoFiscalId: operacao?.id ?? null,
+          exigeNcm: regra.exigeNcm ?? false,
+          ncmInicio: regra.ncmInicio ?? null,
+          ncmFim: regra.ncmFim ?? null,
+          palavrasChaveObrigatorias: regra.palavrasChaveObrigatorias ?? null,
+          palavrasChaveExcludentes: regra.palavrasChaveExcludentes ?? null,
+          atividadePermitida: regra.atividadePermitida ?? null,
+          operacaoPermitida: regra.operacaoPermitida ?? null,
+          exigeDestinacao: regra.exigeDestinacao ?? false,
+          destinacao: regra.destinacao ?? null,
+          cst: regra.cst,
+          cClassTrib: regra.cClassTrib,
+          tipoAliquota: regra.tipoAliquota,
+          pRedIbs: regra.pRedIbs ?? null,
+          pRedCbs: regra.pRedCbs ?? null,
+          fundamentoLegal: regra.fundamentoLegal,
+          artigoLc214: regra.artigoLc214 ?? null,
+          prioridade: regra.prioridade,
+          baseOficialClassificacaoId: baseOficial?.id ?? null,
+          observacoes: regra.observacoes ?? null,
+          ativa: true,
+        },
+      });
+    } else {
+      await prisma.regraAnexoContextual.create({
+        data: {
+          anexo: regra.anexo,
+          descricaoAnexo: regra.descricaoAnexo,
+          operacaoFiscalId: operacao?.id ?? null,
+          exigeNcm: regra.exigeNcm ?? false,
+          ncmInicio: regra.ncmInicio ?? null,
+          ncmFim: regra.ncmFim ?? null,
+          palavrasChaveObrigatorias: regra.palavrasChaveObrigatorias ?? null,
+          palavrasChaveExcludentes: regra.palavrasChaveExcludentes ?? null,
+          atividadePermitida: regra.atividadePermitida ?? null,
+          operacaoPermitida: regra.operacaoPermitida ?? null,
+          exigeDestinacao: regra.exigeDestinacao ?? false,
+          destinacao: regra.destinacao ?? null,
+          cst: regra.cst,
+          cClassTrib: regra.cClassTrib,
+          tipoAliquota: regra.tipoAliquota,
+          pRedIbs: regra.pRedIbs ?? null,
+          pRedCbs: regra.pRedCbs ?? null,
+          fundamentoLegal: regra.fundamentoLegal,
+          artigoLc214: regra.artigoLc214 ?? null,
+          prioridade: regra.prioridade,
+          baseOficialClassificacaoId: baseOficial?.id ?? null,
+          observacoes: regra.observacoes ?? null,
+          ativa: true,
+        },
+      });
+    }
+  }
+}
+
 export async function bootstrapBibliotecaCClassTrib() {
   await upsertFontesNormativas();
   await upsertDestinatariosAlerta();
@@ -579,23 +793,28 @@ export async function bootstrapBibliotecaCClassTrib() {
   await garantirVersaoNormativaInicialPublicada();
   await registrarTabelaNcmComoDownloadComplementar();
   await upsertRegrasExcecao();
+  await upsertRegrasAnexoContextual();
 
   const [
     fontesNormativas,
     destinatariosAlerta,
     operacoesFiscais,
     regrasExcecaoTributaria,
+    regrasAnexoContextual,
     versoesNormativasPublicadas,
     baseOficialClassificacao,
+    ncmAnexosVigentes,
   ] = await Promise.all([
     prisma.fonteNormativa.count(),
     prisma.destinatarioAlerta.count(),
     prisma.operacaoFiscal.count(),
     prisma.regraExcecaoTributaria.count(),
+    prisma.regraAnexoContextual.count(),
     prisma.versaoNormativa.count({
       where: { publicada: true },
     }),
     prisma.baseOficialClassificacao.count(),
+    prisma.ncmAnexoVigente.count(),
   ]);
 
   return {
@@ -605,8 +824,10 @@ export async function bootstrapBibliotecaCClassTrib() {
       destinatariosAlerta,
       operacoesFiscais,
       regrasExcecaoTributaria,
+      regrasAnexoContextual,
       versoesNormativasPublicadas,
       baseOficialClassificacao,
+      ncmAnexosVigentes,
     },
   };
 }
@@ -616,12 +837,14 @@ export async function precisaBootstrapBiblioteca() {
     fontesNormativas,
     operacoesFiscais,
     regrasExcecaoTributaria,
+    regrasAnexoContextual,
     versoesNormativasPublicadas,
     baseOficialClassificacao,
   ] = await Promise.all([
     prisma.fonteNormativa.count(),
     prisma.operacaoFiscal.count(),
     prisma.regraExcecaoTributaria.count(),
+    prisma.regraAnexoContextual.count(),
     prisma.versaoNormativa.count({
       where: { publicada: true },
     }),
@@ -632,6 +855,7 @@ export async function precisaBootstrapBiblioteca() {
     fontesNormativas === 0 ||
     operacoesFiscais === 0 ||
     regrasExcecaoTributaria === 0 ||
+    regrasAnexoContextual === 0 ||
     versoesNormativasPublicadas === 0 ||
     baseOficialClassificacao === 0
   );

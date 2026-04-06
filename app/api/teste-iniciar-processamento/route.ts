@@ -1,8 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { executarProcessamentoClassificacao } from "@/lib/processar-classificacao";
-import { gerarParametrizacaoDoLote } from "@/lib/parametrizacao-engine";
-import { finalizarEntregaParametrizacao } from "@/lib/finalizar-entrega-parametrizacao";
+
+export const runtime = "nodejs";
 
 function escapeHtml(valor?: string | null) {
   return String(valor ?? "")
@@ -19,9 +18,26 @@ function renderHtml(params: {
   protocolo?: string | null;
   cliente?: string | null;
   status?: string | null;
-  emailEnviado?: boolean;
-  emailErro?: string | null;
+  loteId?: string | null;
 }) {
+  const scriptDisparo = params.loteId
+    ? `
+      <script>
+        (async function () {
+          try {
+            await fetch("/api/processar-lote", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ loteId: "${escapeHtml(params.loteId)}" })
+            });
+          } catch (error) {
+            console.error("Erro ao disparar processamento em segundo plano:", error);
+          }
+        })();
+      </script>
+    `
+    : "";
+
   return `
     <!DOCTYPE html>
     <html lang="pt-BR">
@@ -38,20 +54,14 @@ function renderHtml(params: {
           <div style="padding:28px;">
             ${params.protocolo ? `<p><strong>Protocolo:</strong> ${escapeHtml(params.protocolo)}</p>` : ""}
             ${params.cliente ? `<p><strong>Cliente:</strong> ${escapeHtml(params.cliente)}</p>` : ""}
-            ${params.status ? `<p><strong>Status final:</strong> ${escapeHtml(params.status)}</p>` : ""}
+            ${params.status ? `<p><strong>Status atual:</strong> ${escapeHtml(params.status)}</p>` : ""}
             <p style="line-height:1.7;">${params.mensagem}</p>
-            ${
-              params.emailEnviado !== undefined
-                ? `<p><strong>E-mail enviado:</strong> ${params.emailEnviado ? "SIM" : "NAO"}</p>`
-                : ""
-            }
-            ${
-              params.emailErro
-                ? `<p><strong>Erro no e-mail:</strong> ${escapeHtml(params.emailErro)}</p>`
-                : ""
-            }
+            <p style="line-height:1.7;color:#6b7280;">
+              Você não precisa aguardar nesta página. O processamento seguirá em segundo plano.
+            </p>
           </div>
         </div>
+        ${scriptDisparo}
       </body>
     </html>
   `;
@@ -120,37 +130,28 @@ export async function GET(req: NextRequest) {
           protocolo: lote.protocolo,
           cliente: lote.cliente.nomeRazaoSocial,
           status: lote.statusLote,
-          emailEnviado: true,
         }),
         { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }
       );
     }
 
-    await executarProcessamentoClassificacao({
-      loteId: lote.id,
-      ignorarPagamento: true,
-      origem: "BOTAO_TESTE",
+    await prisma.lote.update({
+      where: { id: lote.id },
+      data: {
+        statusLote: "EM_PROCESSAMENTO",
+        dataProcessamentoIniciado: new Date(),
+      },
     });
-
-    await gerarParametrizacaoDoLote({
-      loteId: lote.id,
-      responsavel: "Equipe cClassTrib",
-    });
-
-    const entrega = await finalizarEntregaParametrizacao({
-  loteId: lote.id,
-  ignorarPagamento: true,
-        });
 
     return new Response(
       renderHtml({
-        titulo: "Processamento concluído",
-        mensagem: entrega.mensagem,
-        protocolo: entrega.lote?.protocolo ?? lote.protocolo,
+        titulo: "Processamento iniciado",
+        mensagem:
+          "Seu lote foi colocado em processamento com sucesso. O sistema continuará a execução em segundo plano e a entrega será enviada quando a rotina terminar.",
+        protocolo: lote.protocolo,
         cliente: lote.cliente.nomeRazaoSocial,
-        status: entrega.lote?.statusLote ?? lote.statusLote,
-        emailEnviado: entrega.emailEnviado,
-        emailErro: entrega.emailErro,
+        status: "EM_PROCESSAMENTO",
+        loteId: lote.id,
       }),
       { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }
     );
@@ -163,7 +164,7 @@ export async function GET(req: NextRequest) {
         mensagem:
           error instanceof Error
             ? error.message
-            : "Ocorreu um erro interno ao processar o lote.",
+            : "Ocorreu um erro interno ao iniciar o lote.",
       }),
       { status: 500, headers: { "Content-Type": "text/html; charset=utf-8" } }
     );

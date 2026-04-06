@@ -129,7 +129,7 @@ async function registrarAlertasEDispararEmail(params: {
             resumo: params.resumo,
             payload: params.payload,
             emailEnviado: false,
-            erroEnvio: mensagem,
+            mensagemErro: mensagem,
           },
         })
       )

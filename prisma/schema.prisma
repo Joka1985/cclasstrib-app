@@ -135,6 +135,12 @@ enum TipoDestinatarioOperacao {
   OUTRO
 }
 
+enum TipoAliquotaContextual {
+  ZERO
+  REDUZIDA
+  NORMAL
+}
+
 model Cliente {
   id                 String     @id @default(cuid())
   tipoPessoa         TipoPessoa @map("tipo_pessoa")
@@ -358,10 +364,11 @@ model FonteNormativa {
   createdAt             DateTime              @default(now()) @map("created_at")
   updatedAt             DateTime              @updatedAt @map("updated_at")
 
-  downloads DownloadNormativo[]
-  versoes   VersaoNormativa[]
-  diffs     DiffNormativo[]
-  alertas   AlertaSuporte[]
+  downloads         DownloadNormativo[]
+  versoes           VersaoNormativa[]
+  diffs             DiffNormativo[]
+  alertas           AlertaSuporte[]
+  ncmsAnexoVigentes NcmAnexoVigente[]
 
   @@index([tipoFonte])
   @@index([ativa])
@@ -478,7 +485,7 @@ model AlertaSuporte {
   payload              Json?
   emailEnviado         Boolean          @default(false) @map("email_enviado")
   dataEnvio            DateTime?        @map("data_envio")
-  erroEnvio            String?          @map("erro_envio")
+  mensagemErro         String?          @map("mensagem_erro")
   createdAt            DateTime         @default(now()) @map("created_at")
   updatedAt            DateTime         @updatedAt @map("updated_at")
 
@@ -488,6 +495,7 @@ model AlertaSuporte {
 
   @@index([fonteNormativaId])
   @@index([diffNormativoId])
+  @@index([destinatarioAlertaId])
   @@index([emailEnviado])
   @@map("alertas_suporte")
 }
@@ -497,11 +505,12 @@ model BaseOficialClassificacao {
   versaoNormativaId    String    @map("versao_normativa_id")
   cstIbsCbs            String    @map("cst_ibs_cbs")
   descricaoCst         String?   @map("descricao_cst")
+  descricaoCstIbsCbs   String?   @map("descricao_cst_ibs_cbs")
   cclassTrib           String    @map("cclasstrib")
-  nomeCclassTrib       String    @map("nome_cclasstrib")
+  nomeCclassTrib       String?   @map("nome_cclasstrib")
   descricaoCclassTrib  String?   @map("descricao_cclasstrib")
   lcRedacao            String?   @map("lc_redacao")
-  artigoLc214          String?   @map("artigo_lc214")
+  lc214                String?   @map("lc_214")
   tipoAliquota         String?   @map("tipo_aliquota")
   pRedIbs              Decimal?  @map("p_red_ibs") @db.Decimal(8, 4)
   pRedCbs              Decimal?  @map("p_red_cbs") @db.Decimal(8, 4)
@@ -521,6 +530,7 @@ model BaseOficialClassificacao {
   indCTe               Boolean   @default(false) @map("ind_cte")
   indNFCom             Boolean   @default(false) @map("ind_nfcom")
   linkNormativo        String?   @map("link_normativo")
+  artigoLc214          String?   @map("artigo_lc214")
   anexo                String?
   hashLinha            String?   @map("hash_linha")
   createdAt            DateTime  @default(now()) @map("created_at")
@@ -530,6 +540,7 @@ model BaseOficialClassificacao {
   regrasExcecao            RegraExcecaoTributaria[]
   resultadosParametrizacao ResultadoParametrizacao[]
   cenariosAmbiguidade      CenarioAmbiguidade[]
+  regrasAnexoContextual    RegraAnexoContextual[]
 
   @@unique([versaoNormativaId, cstIbsCbs, cclassTrib])
   @@index([versaoNormativaId])
@@ -558,6 +569,7 @@ model OperacaoFiscal {
   cenariosAmbiguidade      CenarioAmbiguidade[]
   resultadosParametrizacao ResultadoParametrizacao[]
   filaRevisaoTributaria    FilaRevisaoTributaria[]
+  regrasAnexoContextual    RegraAnexoContextual[]
 
   @@index([onerosidade])
   @@index([ativa])
@@ -631,6 +643,45 @@ model RegraExcecaoTributaria {
   @@index([ramoOnerosidade])
   @@index([ativa])
   @@map("regras_excecao_tributaria")
+}
+
+model RegraAnexoContextual {
+  id                         String                 @id @default(cuid())
+  anexo                      String
+  descricaoAnexo             String                 @map("descricao_anexo")
+  operacaoFiscalId           String?                @map("operacao_fiscal_id")
+  exigeNcm                   Boolean                @default(false) @map("exige_ncm")
+  ncmInicio                  String?                @map("ncm_inicio")
+  ncmFim                     String?                @map("ncm_fim")
+  palavrasChaveObrigatorias  String?                @map("palavras_chave_obrigatorias")
+  palavrasChaveExcludentes   String?                @map("palavras_chave_excludentes")
+  atividadePermitida         String?                @map("atividade_permitida")
+  operacaoPermitida          String?                @map("operacao_permitida")
+  exigeDestinacao            Boolean                @default(false) @map("exige_destinacao")
+  destinacao                 String?
+  cst                        String
+  cClassTrib                 String                 @map("cclasstrib")
+  tipoAliquota               TipoAliquotaContextual @map("tipo_aliquota")
+  pRedIbs                    Decimal?               @map("p_red_ibs") @db.Decimal(8, 4)
+  pRedCbs                    Decimal?               @map("p_red_cbs") @db.Decimal(8, 4)
+  fundamentoLegal            String                 @map("fundamento_legal")
+  artigoLc214                String?                @map("artigo_lc214")
+  prioridade                 Int
+  baseOficialClassificacaoId String?                @map("base_oficial_classificacao_id")
+  observacoes                String?
+  ativa                      Boolean                @default(true)
+  createdAt                  DateTime               @default(now()) @map("created_at")
+  updatedAt                  DateTime               @updatedAt @map("updated_at")
+
+  operacaoFiscal           OperacaoFiscal?           @relation(fields: [operacaoFiscalId], references: [id], onDelete: SetNull)
+  baseOficialClassificacao BaseOficialClassificacao? @relation(fields: [baseOficialClassificacaoId], references: [id], onDelete: SetNull)
+
+  @@index([anexo])
+  @@index([operacaoFiscalId])
+  @@index([ncmInicio, ncmFim])
+  @@index([prioridade])
+  @@index([ativa])
+  @@map("regras_anexo_contextual")
 }
 
 model CenarioAmbiguidade {
@@ -724,4 +775,44 @@ model FilaRevisaoTributaria {
   @@index([loteId])
   @@index([statusDecisao])
   @@map("fila_revisao_tributaria")
+}
+
+model NcmAnexoVigente {
+  id               String    @id @default(cuid())
+  fonteNormativaId String?   @map("fonte_normativa_id")
+  codigoNcm        String    @map("codigo_ncm")
+  capitulo         String?   @map("capitulo")
+  ordem            Int?      @map("ordem")
+  codigoOriginal   String?   @map("codigo_original")
+  descricao        String?   @map("descricao")
+  anexoLc214       String?   @map("anexo_lc214")
+  anexoI           String?   @map("anexo_i")
+  anexoIV          String?   @map("anexo_iv")
+  anexoV           String?   @map("anexo_v")
+  anexoVI          String?   @map("anexo_vi")
+  anexoVII         String?   @map("anexo_vii")
+  anexoVIII        String?   @map("anexo_viii")
+  anexoIX          String?   @map("anexo_ix")
+  anexoXI          String?   @map("anexo_xi")
+  anexoXII         String?   @map("anexo_xii")
+  anexoXIII        String?   @map("anexo_xiii")
+  anexoXIV         String?   @map("anexo_xiv")
+  anexoXV          String?   @map("anexo_xv")
+  dataInicio       DateTime? @map("data_inicio")
+  dataFim          DateTime? @map("data_fim")
+  atoLegalInicio   String?   @map("ato_legal_inicio")
+  numeroAto        String?   @map("numero_ato")
+  anoAto           String?   @map("ano_ato")
+  observacoes      String?
+  hashLinha        String?   @map("hash_linha")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  fonteNormativa FonteNormativa? @relation(fields: [fonteNormativaId], references: [id], onDelete: SetNull)
+
+  @@index([codigoNcm])
+  @@index([anexoLc214])
+  @@index([capitulo])
+  @@index([fonteNormativaId])
+  @@map("ncm_anexos_vigentes")
 }

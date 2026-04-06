@@ -14,12 +14,18 @@ type DestinatarioTipo =
 
 type Onerosidade = "ONEROSA" | "NAO_ONEROSA" | "INDETERMINADA";
 
-type StatusDecisao = "FECHADO" | "FECHADO_COM_RESSALVA" | "REVISAR" | "SEM_EVIDENCIA";
+type StatusDecisao =
+  | "FECHADO"
+  | "FECHADO_COM_RESSALVA"
+  | "REVISAR"
+  | "SEM_EVIDENCIA";
 
 type TipoAmbiguidade =
   | "DADO_OBRIGATORIO_AUSENTE"
   | "SEM_REGRA_VENCEDORA"
   | "EXIGE_ANALISE_HUMANA";
+
+type TipoAliquotaContextual = "ZERO" | "REDUZIDA" | "NORMAL";
 
 type ClassificacaoDecidida = {
   cst: string;
@@ -117,10 +123,28 @@ type RegraCompatibilizada = {
   baseOficialClassificacaoId: string | null;
 };
 
+type RegraAnexoContextualSelecionada = {
+  id: string;
+  anexo: string;
+  descricaoAnexo: string;
+  cst: string;
+  cClassTrib: string;
+  tipoAliquota: TipoAliquotaContextual;
+  pRedIbs: number | null;
+  pRedCbs: number | null;
+  fundamentoLegal: string;
+  artigoLc214: string | null;
+  baseOficialClassificacaoId: string | null;
+  prioridade: number;
+  observacoes: string | null;
+};
+
 type ContextoClassificacao = {
   loteId: string;
   itemPlanilhaId: string;
   itemXmlId: string | null;
+  clienteId: string;
+  atividadePrincipalCliente: string | null;
   ncm: string | null;
   cfop: string | null;
   descricao: string;
@@ -156,6 +180,35 @@ function normalizarCfop(valor?: string | null) {
 
 function construirObservacoes(partes: Array<string | null | undefined>) {
   return partes.filter(Boolean).join(" ");
+}
+
+function parseLista(valor?: string | null) {
+  return String(valor ?? "")
+    .split(",")
+    .map((v) => normalizarTexto(v))
+    .filter(Boolean);
+}
+
+function descricaoContemAlguma(descricao: string, lista: string[]) {
+  return lista.some((token) => descricao.includes(token));
+}
+
+function atividadeCompativel(
+  atividadePrincipal: string | null | undefined,
+  atividadePermitida: string | null | undefined,
+) {
+  const atividade = normalizarTexto(atividadePrincipal);
+  const regra = normalizarTexto(atividadePermitida);
+
+  if (!regra) return true;
+  if (!atividade) return false;
+
+  const grupos = regra
+    .split("|")
+    .map((v) => v.trim())
+    .filter(Boolean);
+
+  return grupos.some((grupo) => atividade.includes(grupo));
 }
 
 function montarChaveUnicaResultado(params: {
@@ -292,7 +345,7 @@ function inferirCodigoOperacaoPorHeuristica(params: {
   }
 
   if (cfop === "5910" || cfop === "6910" || descricao.includes("BONIFICA")) {
-    return ["BONIFICACAO", "BRINDE", "DOACAO"];
+    return ["BONIFICACAO", "DOACAO"];
   }
 
   if (cfop === "5918" || cfop === "6918" || descricao.includes("DOACAO")) {
@@ -300,14 +353,21 @@ function inferirCodigoOperacaoPorHeuristica(params: {
   }
 
   if (cfop === "5908" || cfop === "6908" || descricao.includes("COMODATO")) {
-    return ["COMODATO"];
+    return ["OPERACAO_A_REVISAR"];
   }
 
-  if (["5151", "5152", "6151", "6152"].includes(cfop ?? "") || descricao.includes("TRANSFER")) {
-    return ["TRANSFERENCIA_FILIAL", "TRANSFERENCIA"];
+  if (
+    ["5151", "5152", "6151", "6152"].includes(cfop ?? "") ||
+    descricao.includes("TRANSFER")
+  ) {
+    return ["TRANSFERENCIA_FILIAL"];
   }
 
-  if (["5915", "6915", "5916", "6916"].includes(cfop ?? "") || descricao.includes("CONSERTO") || descricao.includes("REPARO")) {
+  if (
+    ["5915", "6915", "5916", "6916"].includes(cfop ?? "") ||
+    descricao.includes("CONSERTO") ||
+    descricao.includes("REPARO")
+  ) {
     return ["REMESSA_CONSERTO"];
   }
 
@@ -318,8 +378,21 @@ function inferirCodigoOperacaoPorHeuristica(params: {
   return ["VENDA_NORMAL", "VENDA_ST_SUBSTITUIDO", "OPERACAO_A_REVISAR"];
 }
 
-async function carregarMapaOperacoesFiscais() {
-  const operacoes = await prisma.operacaoFiscal.findMany({
+function mapearTipoAliquotaDoContexto(valor?: string | null) {
+  const v = normalizarTexto(valor);
+
+  if (!v) return null;
+  if (v === "FIXA") return "1 - Fixa";
+  if (v === "PADRAO") return "2 - Padrão";
+  if (v === "SEM ALIQUOTA") return "3 - Sem alíquota";
+  if (v === "UNIFORME NACIONAL") return "4 - Uniforme Nacional";
+  if (v === "UNIFORME SETORIAL") return "5 - Uniforme Setorial";
+
+  return valor ?? null;
+}
+
+async function carregarOperacoesFiscais() {
+  return prisma.operacaoFiscal.findMany({
     where: { ativa: true },
     select: {
       id: true,
@@ -331,8 +404,6 @@ async function carregarMapaOperacoesFiscais() {
       ativa: true,
     },
   });
-
-  return operacoes;
 }
 
 async function resolverOperacaoViaBanco(params: {
@@ -341,7 +412,7 @@ async function resolverOperacaoViaBanco(params: {
   clienteCpfCnpj: string | null;
   destinatarioCpfCnpj: string | null;
   destinatarioNome: string | null;
-  operacoesFiscais: Awaited<ReturnType<typeof carregarMapaOperacoesFiscais>>;
+  operacoesFiscais: Awaited<ReturnType<typeof carregarOperacoesFiscais>>;
   evidencias: EvidenciaRelacionavel[];
 }): Promise<ClassificacaoOperacao> {
   const evidencias: string[] = [];
@@ -356,14 +427,17 @@ async function resolverOperacaoViaBanco(params: {
     .sort((a, b) => b.grauConfianca - a.grauConfianca)[0];
 
   if (evidenciaValidada?.operacaoFiscalId) {
-    const operacao = params.operacoesFiscais.find((o) => o.id === evidenciaValidada.operacaoFiscalId);
+    const operacao = params.operacoesFiscais.find(
+      (o) => o.id === evidenciaValidada.operacaoFiscalId,
+    );
     if (operacao) {
       evidencias.push("Operação resolvida por evidência validada.");
       return {
         operacaoFiscalId: operacao.id,
         codigoOperacao: operacao.codigo,
         onerosidade: operacao.onerosidade,
-        destinatarioTipo: evidenciaValidada.destinatarioTipo ?? destinatarioTipoInferido,
+        destinatarioTipo:
+          evidenciaValidada.destinatarioTipo ?? destinatarioTipoInferido,
         evidencias,
       };
     }
@@ -375,10 +449,14 @@ async function resolverOperacaoViaBanco(params: {
     destinatarioTipo: destinatarioTipoInferido,
   });
 
-  const operacao = params.operacoesFiscais.find((o) => candidatos.includes(o.codigo));
+  const operacao = params.operacoesFiscais.find((o) =>
+    candidatos.includes(o.codigo),
+  );
 
   if (operacao) {
-    evidencias.push(`Operação inferida por heurística controlada e confirmada no cadastro: ${operacao.codigo}.`);
+    evidencias.push(
+      `Operação inferida por heurística controlada e confirmada no cadastro: ${operacao.codigo}.`,
+    );
     return {
       operacaoFiscalId: operacao.id,
       codigoOperacao: operacao.codigo,
@@ -388,7 +466,9 @@ async function resolverOperacaoViaBanco(params: {
     };
   }
 
-  evidencias.push("Nenhuma operação fiscal ativa encontrada no cadastro para os indícios coletados.");
+  evidencias.push(
+    "Nenhuma operação fiscal ativa encontrada no cadastro para os indícios coletados.",
+  );
   return {
     operacaoFiscalId: null,
     codigoOperacao: "OPERACAO_A_REVISAR",
@@ -419,53 +499,104 @@ async function buscarBaseOficialPublicadaPorId(baseId: string | null) {
 
   if (!base) return null;
   if (!base.versaoNormativa.publicada) return null;
-  if (base.versaoNormativa.fonteNormativa.tipoFonte !== "CCLASSTRIB_OFICIAL") return null;
+  if (base.versaoNormativa.fonteNormativa.tipoFonte !== "CCLASSTRIB_OFICIAL") {
+    return null;
+  }
 
   return base;
 }
 
-async function montarClassificacaoFechada(decisao: ClassificacaoDecidida, baseId: string | null) {
-  const baseOficial = await buscarBaseOficialPublicadaPorId(baseId);
+async function buscarBaseOficialPublicadaPorPar(
+  cst: string | null,
+  cclassTrib: string | null,
+) {
+  if (!cst || !cclassTrib) return null;
 
-  if (!baseOficial?.descricaoCclassTrib && !baseOficial?.nomeCclassTrib) {
-    return {
-      classificacao: null,
-      baseOficialClassificacaoId: baseOficial?.id ?? null,
-    };
+  const base = await prisma.baseOficialClassificacao.findFirst({
+    where: {
+      cstIbsCbs: cst,
+      cclassTrib,
+      versaoNormativa: {
+        publicada: true,
+        fonteNormativa: {
+          tipoFonte: "CCLASSTRIB_OFICIAL",
+        },
+      },
+    },
+    include: {
+      versaoNormativa: {
+        select: {
+          publicada: true,
+          fonteNormativa: {
+            select: {
+              tipoFonte: true,
+            },
+          },
+        },
+      },
+    },
+    orderBy: [
+      { versaoNormativaId: "desc" },
+      { updatedAt: "desc" },
+    ],
+  });
+
+  if (!base) return null;
+  if (!base.versaoNormativa.publicada) return null;
+  if (base.versaoNormativa.fonteNormativa.tipoFonte !== "CCLASSTRIB_OFICIAL") {
+    return null;
   }
 
+  return base;
+}
+
+type BaseOficialPublicada = NonNullable<
+  Awaited<ReturnType<typeof buscarBaseOficialPublicadaPorId>>
+>;
+
+function montarClassificacaoFechadaDaBase(params: {
+  base: BaseOficialPublicada;
+}): ClassificacaoFechada {
   return {
-    baseOficialClassificacaoId: baseOficial.id,
-    classificacao: {
-      ...decisao,
-      descCclassTrib: baseOficial.descricaoCclassTrib ?? baseOficial.nomeCclassTrib,
-      tipoAliquota: baseOficial.tipoAliquota ?? null,
-      pRedIbs:
-        baseOficial.pRedIbs !== null && baseOficial.pRedIbs !== undefined
-          ? Number(baseOficial.pRedIbs)
-          : null,
-      pRedCbs:
-        baseOficial.pRedCbs !== null && baseOficial.pRedCbs !== undefined
-          ? Number(baseOficial.pRedCbs)
-          : null,
-      artigoLc214: baseOficial.artigoLc214 ?? null,
-      anexo: baseOficial.anexo ?? null,
-    },
+    cst: params.base.cstIbsCbs,
+    cclassTrib: params.base.cclassTrib,
+    fundamento: params.base.artigoLc214 ?? null,
+    observacoes: params.base.lcRedacao ?? "",
+    descCclassTrib:
+      params.base.descricaoCclassTrib ??
+      params.base.nomeCclassTrib ?? "",
+    tipoAliquota: mapearTipoAliquotaDoContexto(params.base.tipoAliquota),
+    pRedIbs:
+      params.base.pRedIbs !== null && params.base.pRedIbs !== undefined
+        ? Number(params.base.pRedIbs)
+        : null,
+    pRedCbs:
+      params.base.pRedCbs !== null && params.base.pRedCbs !== undefined
+        ? Number(params.base.pRedCbs)
+        : null,
+    artigoLc214: params.base.artigoLc214 ?? null,
+    anexo: params.base.anexo ?? null,
   };
 }
 
-function regraEstaVigente(regra: {
-  inicioVigencia: Date | null;
-  fimVigencia: Date | null;
-}, dataReferencia: Date) {
+function regraEstaVigente(
+  regra: { inicioVigencia: Date | null; fimVigencia: Date | null },
+  dataReferencia: Date,
+) {
   const ref = dataReferencia.getTime();
   const ini = regra.inicioVigencia?.getTime() ?? Number.NEGATIVE_INFINITY;
   const fim = regra.fimVigencia?.getTime() ?? Number.POSITIVE_INFINITY;
   return ref >= ini && ref <= fim;
 }
 
-function regraCompativelComContexto(regra: RegraCompatibilizada, contexto: ContextoClassificacao) {
-  if (regra.operacaoFiscalId && regra.operacaoFiscalId !== contexto.classificacaoOperacao.operacaoFiscalId) {
+function regraCompativelComContexto(
+  regra: RegraCompatibilizada,
+  contexto: ContextoClassificacao,
+) {
+  if (
+    regra.operacaoFiscalId &&
+    regra.operacaoFiscalId !== contexto.classificacaoOperacao.operacaoFiscalId
+  ) {
     return false;
   }
 
@@ -491,37 +622,56 @@ function regraCompativelComContexto(regra: RegraCompatibilizada, contexto: Conte
     if (!cfop || !lista.includes(cfop)) return false;
   }
 
-  if (regra.exigeDestinatarioTipo && regra.destinatarioTipo !== contexto.classificacaoOperacao.destinatarioTipo) {
+  if (
+    regra.exigeDestinatarioTipo &&
+    regra.destinatarioTipo !== contexto.classificacaoOperacao.destinatarioTipo
+  ) {
     return false;
   }
 
-  const dependeEventoPosterior = contexto.evidencias.some((e) => e.dependeEventoPosterior === true);
+  const dependeEventoPosterior = contexto.evidencias.some(
+    (e) => e.dependeEventoPosterior === true,
+  );
   if (regra.exigeEventoPosterior && !dependeEventoPosterior) {
     return false;
   }
 
   const constaNoDocumento =
-    contexto.evidencias.some((e) => e.constaNoDocumento === true) || contexto.possuiRelacaoXml;
+    contexto.evidencias.some((e) => e.constaNoDocumento === true) ||
+    contexto.possuiRelacaoXml;
   if (regra.exigeConstarDocumento && !constaNoDocumento) {
     return false;
   }
 
-  const haContraprestacaoPorEvidencia = contexto.evidencias.find((e) => e.haContraprestacao !== null)?.haContraprestacao;
+  const haContraprestacaoPorEvidencia = contexto.evidencias.find(
+    (e) => e.haContraprestacao !== null,
+  )?.haContraprestacao;
   const haContraprestacao =
-    haContraprestacaoPorEvidencia ?? (contexto.classificacaoOperacao.onerosidade === "ONEROSA");
-  if (regra.exigeContraprestacao !== null && regra.exigeContraprestacao !== haContraprestacao) {
+    haContraprestacaoPorEvidencia ??
+    (contexto.classificacaoOperacao.onerosidade === "ONEROSA");
+
+  if (
+    regra.exigeContraprestacao !== null &&
+    regra.exigeContraprestacao !== haContraprestacao
+  ) {
     return false;
   }
 
   return true;
 }
 
-async function buscarRegrasCompativeis(contexto: ContextoClassificacao, dataReferencia: Date) {
+async function buscarRegrasCompativeis(
+  contexto: ContextoClassificacao,
+  dataReferencia: Date,
+) {
   const regras = await prisma.regraExcecaoTributaria.findMany({
     where: {
       ativa: true,
       OR: [
-        { operacaoFiscalId: contexto.classificacaoOperacao.operacaoFiscalId ?? undefined },
+        {
+          operacaoFiscalId:
+            contexto.classificacaoOperacao.operacaoFiscalId ?? undefined,
+        },
         { operacaoFiscalId: null },
       ],
       ramoOnerosidade: contexto.classificacaoOperacao.onerosidade,
@@ -558,6 +708,121 @@ async function buscarRegrasCompativeis(contexto: ContextoClassificacao, dataRefe
     .filter((regra) => regraCompativelComContexto(regra, contexto));
 }
 
+async function buscarRegraAnexoContextual(
+  contexto: ContextoClassificacao,
+): Promise<RegraAnexoContextualSelecionada | null> {
+  const ncm = normalizarNcm(contexto.ncm);
+  if (!ncm) return null;
+  if (contexto.classificacaoOperacao.onerosidade !== "ONEROSA") return null;
+  if (!contexto.classificacaoOperacao.operacaoFiscalId) return null;
+
+  const descricao = normalizarTexto(contexto.descricao);
+
+  const regras = await prisma.regraAnexoContextual.findMany({
+    where: {
+      ativa: true,
+      OR: [
+        { operacaoFiscalId: contexto.classificacaoOperacao.operacaoFiscalId },
+        { operacaoFiscalId: null },
+      ],
+    },
+    orderBy: [{ prioridade: "asc" }, { anexo: "asc" }],
+    select: {
+      id: true,
+      anexo: true,
+      descricaoAnexo: true,
+      exigeNcm: true,
+      ncmInicio: true,
+      ncmFim: true,
+      palavrasChaveObrigatorias: true,
+      palavrasChaveExcludentes: true,
+      atividadePermitida: true,
+      operacaoPermitida: true,
+      exigeDestinacao: true,
+      destinacao: true,
+      cst: true,
+      cClassTrib: true,
+      tipoAliquota: true,
+      pRedIbs: true,
+      pRedCbs: true,
+      fundamentoLegal: true,
+      artigoLc214: true,
+      observacoes: true,
+      prioridade: true,
+      baseOficialClassificacaoId: true,
+    },
+  });
+
+  for (const regra of regras) {
+    if (regra.exigeNcm) {
+      const ncmInicio = normalizarNcm(regra.ncmInicio);
+      const ncmFim = normalizarNcm(regra.ncmFim);
+      if (ncmInicio && ncm < ncmInicio) continue;
+      if (ncmFim && ncm > ncmFim) continue;
+    }
+
+    if (
+      !atividadeCompativel(
+        contexto.atividadePrincipalCliente,
+        regra.atividadePermitida,
+      )
+    ) {
+      continue;
+    }
+
+    const operacaoPermitida = normalizarTexto(regra.operacaoPermitida);
+    if (
+      operacaoPermitida &&
+      operacaoPermitida !==
+        normalizarTexto(contexto.classificacaoOperacao.codigoOperacao)
+    ) {
+      continue;
+    }
+
+    const obrigatorias = parseLista(regra.palavrasChaveObrigatorias);
+    if (
+      obrigatorias.length > 0 &&
+      !descricaoContemAlguma(descricao, obrigatorias)
+    ) {
+      continue;
+    }
+
+    const excludentes = parseLista(regra.palavrasChaveExcludentes);
+    if (excludentes.length > 0 && descricaoContemAlguma(descricao, excludentes)) {
+      continue;
+    }
+
+    if (regra.exigeDestinacao) {
+      const destinacao = normalizarTexto(regra.destinacao);
+      if (!destinacao) continue;
+      if (
+        !descricao.includes(destinacao) &&
+        !normalizarTexto(contexto.atividadePrincipalCliente).includes(destinacao)
+      ) {
+        continue;
+      }
+    }
+
+    return {
+      id: regra.id,
+      anexo: regra.anexo,
+      descricaoAnexo: regra.descricaoAnexo,
+      cst: regra.cst,
+      cClassTrib: regra.cClassTrib,
+      tipoAliquota: regra.tipoAliquota,
+      pRedIbs: regra.pRedIbs !== null ? Number(regra.pRedIbs) : null,
+      pRedCbs: regra.pRedCbs !== null ? Number(regra.pRedCbs) : null,
+      fundamentoLegal: regra.fundamentoLegal,
+      artigoLc214: regra.artigoLc214,
+      baseOficialClassificacaoId: regra.baseOficialClassificacaoId ?? null,
+      prioridade: regra.prioridade,
+      observacoes: regra.observacoes,
+    };
+  }
+
+  return null;
+}
+
 async function buscarCenariosAmbiguidade(contexto: ContextoClassificacao) {
   return prisma.cenarioAmbiguidade.findMany({
     where: {
@@ -565,15 +830,15 @@ async function buscarCenariosAmbiguidade(contexto: ContextoClassificacao) {
       AND: [
         {
           OR: [
-            { operacaoFiscalId: contexto.classificacaoOperacao.operacaoFiscalId ?? undefined },
+            {
+              operacaoFiscalId:
+                contexto.classificacaoOperacao.operacaoFiscalId ?? undefined,
+            },
             { operacaoFiscalId: null },
           ],
         },
         {
-          OR: [
-            { ncm: normalizarNcm(contexto.ncm) ?? undefined },
-            { ncm: null },
-          ],
+          OR: [{ ncm: normalizarNcm(contexto.ncm) ?? undefined }, { ncm: null }],
         },
         {
           OR: [
@@ -594,7 +859,9 @@ async function buscarCenariosAmbiguidade(contexto: ContextoClassificacao) {
   });
 }
 
-async function resolverClassificacaoViaBanco(contexto: ContextoClassificacao): Promise<ResultadoMotor> {
+async function resolverClassificacaoViaBanco(
+  contexto: ContextoClassificacao,
+): Promise<ResultadoMotor> {
   const ncm = normalizarNcm(contexto.ncm);
   const cfop = normalizarCfop(contexto.cfop);
 
@@ -667,7 +934,82 @@ async function resolverClassificacaoViaBanco(contexto: ContextoClassificacao): P
       motivoRevisao: `Cenário de ambiguidade ativo (${cenarioRelevante.codigoCenario}).`,
       tipoAmbiguidade: "EXIGE_ANALISE_HUMANA",
       sugestaoMotor: contexto.classificacaoOperacao.codigoOperacao,
-      baseOficialClassificacaoId: cenarioRelevante.baseOficialClassificacaoId ?? null,
+      baseOficialClassificacaoId:
+        cenarioRelevante.baseOficialClassificacaoId ?? null,
+    };
+  }
+
+  const regraAnexo = await buscarRegraAnexoContextual(contexto);
+  if (regraAnexo) {
+    const basePorId = regraAnexo.baseOficialClassificacaoId
+      ? await buscarBaseOficialPublicadaPorId(
+          regraAnexo.baseOficialClassificacaoId,
+        )
+      : null;
+
+    const basePorPar = basePorId
+      ? null
+      : await buscarBaseOficialPublicadaPorPar(
+          regraAnexo.cst,
+          regraAnexo.cClassTrib,
+        );
+
+    const base = basePorId ?? basePorPar;
+
+    if (!base) {
+      return {
+        classificado: false,
+        classificacao: null,
+        statusDecisao: "SEM_EVIDENCIA",
+        fundamento: regraAnexo.artigoLc214 ?? regraAnexo.fundamentoLegal ?? null,
+        observacoes: construirObservacoes([
+          `Regra contextual do Anexo ${regraAnexo.anexo} encontrada, mas sem base oficial válida para fechar CST/cClassTrib.`,
+          regraAnexo.descricaoAnexo,
+          regraAnexo.observacoes,
+        ]),
+        acaoProgramador:
+          "Revisar vínculo entre RegraAnexoContextual e BaseOficialClassificacao.",
+        motivoRevisao:
+          "Regra contextual encontrada sem base oficial classificatória válida.",
+        tipoAmbiguidade: "SEM_REGRA_VENCEDORA",
+        sugestaoMotor: contexto.classificacaoOperacao.codigoOperacao,
+        baseOficialClassificacaoId: null,
+      };
+    }
+
+    const classificacao = montarClassificacaoFechadaDaBase({ base });
+
+    const fechadoComRessalva =
+      !contexto.possuiRelacaoXml ||
+      contexto.descricaoDivergente ||
+      contexto.ncmDivergente ||
+      contexto.evidencias.some((e) => !e.validado);
+
+    return {
+      classificado: true,
+      classificacao,
+      statusDecisao: fechadoComRessalva ? "FECHADO_COM_RESSALVA" : "FECHADO",
+      fundamento: classificacao.fundamento,
+      observacoes: construirObservacoes([
+        classificacao.observacoes,
+        ...contexto.classificacaoOperacao.evidencias,
+        !contexto.possuiRelacaoXml
+          ? "Sem relação identificada com item de XML."
+          : null,
+        contexto.descricaoDivergente
+          ? "Descrição divergente entre planilha e XML."
+          : null,
+        contexto.ncmDivergente ? "NCM divergente entre planilha e XML." : null,
+      ]),
+      acaoProgramador: fechadoComRessalva
+        ? "Parametrizar com validação técnica prévia."
+        : "Parametrizar no ERP conforme linha final.",
+      motivoRevisao: fechadoComRessalva
+        ? "Caso fechado com ressalva por divergência ou falta de evidência completa."
+        : null,
+      tipoAmbiguidade: fechadoComRessalva ? "EXIGE_ANALISE_HUMANA" : null,
+      sugestaoMotor: contexto.classificacaoOperacao.codigoOperacao,
+      baseOficialClassificacaoId: base.id,
     };
   }
 
@@ -692,26 +1034,41 @@ async function resolverClassificacaoViaBanco(contexto: ContextoClassificacao): P
   }
 
   const prioridadeVencedora = regrasCompativeis[0].prioridade;
-  const regrasEmpatadas = regrasCompativeis.filter((regra) => regra.prioridade === prioridadeVencedora);
+  const regrasEmpatadas = regrasCompativeis.filter(
+    (regra) => regra.prioridade === prioridadeVencedora,
+  );
 
   if (regrasEmpatadas.length > 1) {
     return {
       classificado: false,
       classificacao: null,
       statusDecisao: "REVISAR",
-      fundamento: regrasEmpatadas.map((regra) => regra.fundamentoLegal).filter(Boolean).join(" | ") || null,
-      observacoes: `Mais de uma regra tributária vencedora foi encontrada com a mesma prioridade: ${regrasEmpatadas.map((regra) => regra.codigo).join(", ")}.`,
+      fundamento:
+        regrasEmpatadas
+          .map((regra) => regra.fundamentoLegal)
+          .filter(Boolean)
+          .join(" | ") || null,
+      observacoes: `Mais de uma regra tributária vencedora foi encontrada com a mesma prioridade: ${regrasEmpatadas
+        .map((regra) => regra.codigo)
+        .join(", ")}.`,
       acaoProgramador: "Submeter à revisão técnica antes de parametrizar.",
       motivoRevisao: "Conflito entre regras com mesma prioridade.",
       tipoAmbiguidade: "EXIGE_ANALISE_HUMANA",
       sugestaoMotor: contexto.classificacaoOperacao.codigoOperacao,
-      baseOficialClassificacaoId: regrasEmpatadas[0].baseOficialClassificacaoId,
+      baseOficialClassificacaoId:
+        regrasEmpatadas[0].baseOficialClassificacaoId,
     };
   }
 
   const regraVencedora = regrasCompativeis[0];
 
-  if (!regraVencedora.baseOficialClassificacaoId) {
+  const baseOficial = regraVencedora.baseOficialClassificacaoId
+    ? await buscarBaseOficialPublicadaPorId(
+        regraVencedora.baseOficialClassificacaoId,
+      )
+    : null;
+
+  if (!baseOficial) {
     return {
       classificado: false,
       classificacao: null,
@@ -721,7 +1078,8 @@ async function resolverClassificacaoViaBanco(contexto: ContextoClassificacao): P
         `Regra vencedora encontrada (${regraVencedora.codigo}), porém sem vínculo com base oficial de classificação.`,
         regraVencedora.observacoes,
       ]),
-      acaoProgramador: "Completar a vinculação normativa antes de parametrizar automaticamente.",
+      acaoProgramador:
+        "Completar a vinculação normativa antes de parametrizar automaticamente.",
       motivoRevisao: "Regra vencedora sem base oficial vinculada.",
       tipoAmbiguidade: "SEM_REGRA_VENCEDORA",
       sugestaoMotor: contexto.classificacaoOperacao.codigoOperacao,
@@ -729,57 +1087,9 @@ async function resolverClassificacaoViaBanco(contexto: ContextoClassificacao): P
     };
   }
 
-  const baseOficial = await buscarBaseOficialPublicadaPorId(regraVencedora.baseOficialClassificacaoId);
-
-  if (!baseOficial) {
-    return {
-      classificado: false,
-      classificacao: null,
-      statusDecisao: "SEM_EVIDENCIA",
-      fundamento: regraVencedora.fundamentoLegal ?? null,
-      observacoes: "A regra vencedora aponta para uma base oficial inexistente, não publicada ou fora da fonte oficial ativa.",
-      acaoProgramador: "Validar publicação normativa antes de parametrizar.",
-      motivoRevisao: "Base oficial vinculada não encontrada ou não publicada.",
-      tipoAmbiguidade: "SEM_REGRA_VENCEDORA",
-      sugestaoMotor: contexto.classificacaoOperacao.codigoOperacao,
-      baseOficialClassificacaoId: regraVencedora.baseOficialClassificacaoId,
-    };
-  }
-
-  const decisao: ClassificacaoDecidida = {
-    cst: baseOficial.cstIbsCbs,
-    cclassTrib: baseOficial.cclassTrib,
-    fundamento:
-      regraVencedora.fundamentoLegal ??
-      regraVencedora.artigoLc214 ??
-      baseOficial.artigoLc214 ??
-      null,
-    observacoes: construirObservacoes([
-      `Regra vencedora aplicada: ${regraVencedora.codigo} - ${regraVencedora.nomeRegra}.`,
-      regraVencedora.observacoes,
-      baseOficial.anexo ? `Anexo aplicável: ${baseOficial.anexo}.` : null,
-    ]),
-  };
-
-  const { classificacao, baseOficialClassificacaoId } = await montarClassificacaoFechada(
-    decisao,
-    regraVencedora.baseOficialClassificacaoId,
-  );
-
-  if (!classificacao) {
-    return {
-      classificado: false,
-      classificacao: null,
-      statusDecisao: "SEM_EVIDENCIA",
-      fundamento: decisao.fundamento,
-      observacoes: "Código tributário decidido, mas sem metadados oficiais válidos para entrega final.",
-      acaoProgramador: "Não parametrizar sem validação técnica.",
-      motivoRevisao: "Metadados oficiais não localizados para a classificação decidida.",
-      tipoAmbiguidade: "SEM_REGRA_VENCEDORA",
-      sugestaoMotor: `${decisao.cst}/${decisao.cclassTrib}`,
-      baseOficialClassificacaoId: baseOficialClassificacaoId ?? regraVencedora.baseOficialClassificacaoId,
-    };
-  }
+  const classificacao = montarClassificacaoFechadaDaBase({
+    base: baseOficial,
+  });
 
   const fechadoComRessalva =
     !contexto.possuiRelacaoXml ||
@@ -795,8 +1105,12 @@ async function resolverClassificacaoViaBanco(contexto: ContextoClassificacao): P
     observacoes: construirObservacoes([
       classificacao.observacoes,
       ...contexto.classificacaoOperacao.evidencias,
-      !contexto.possuiRelacaoXml ? "Sem relação identificada com item de XML." : null,
-      contexto.descricaoDivergente ? "Descrição divergente entre planilha e XML." : null,
+      !contexto.possuiRelacaoXml
+        ? "Sem relação identificada com item de XML."
+        : null,
+      contexto.descricaoDivergente
+        ? "Descrição divergente entre planilha e XML."
+        : null,
       contexto.ncmDivergente ? "NCM divergente entre planilha e XML." : null,
     ]),
     acaoProgramador: fechadoComRessalva
@@ -807,7 +1121,7 @@ async function resolverClassificacaoViaBanco(contexto: ContextoClassificacao): P
       : null,
     tipoAmbiguidade: fechadoComRessalva ? "EXIGE_ANALISE_HUMANA" : null,
     sugestaoMotor: contexto.classificacaoOperacao.codigoOperacao,
-    baseOficialClassificacaoId: baseOficialClassificacaoId ?? regraVencedora.baseOficialClassificacaoId,
+    baseOficialClassificacaoId: baseOficial.id,
   };
 }
 
@@ -852,25 +1166,26 @@ export async function gerarParametrizacaoDoLote(params: {
     where: { loteId: lote.id },
   });
 
-  const operacoesFiscais = await carregarMapaOperacoesFiscais();
+  const operacoesFiscais = await carregarOperacoesFiscais();
 
-  const itensXmlRelacionaveis: ItemXmlRelacionavel[] = lote.xmlDocumentos.flatMap((doc) =>
-    doc.itensXml.map((itemXml) => ({
-      id: itemXml.id,
-      codigoItem: itemXml.codigoItem,
-      descricaoItem: itemXml.descricaoItem,
-      ncm: itemXml.ncm,
-      cfop: itemXml.cfop,
-      xmlDocumento: {
-        id: doc.id,
-        tipoDocumento: doc.tipoDocumento,
-        destinatarioCpfCnpj: doc.destinatarioCpfCnpj,
-        destinatarioNome: doc.destinatarioNome,
-        emitenteCpfCnpj: doc.emitenteCpfCnpj,
-        emitenteNome: doc.emitenteNome,
-        statusXml: doc.statusXml,
-      },
-    })),
+  const itensXmlRelacionaveis: ItemXmlRelacionavel[] = lote.xmlDocumentos.flatMap(
+    (doc) =>
+      doc.itensXml.map((itemXml) => ({
+        id: itemXml.id,
+        codigoItem: itemXml.codigoItem,
+        descricaoItem: itemXml.descricaoItem,
+        ncm: itemXml.ncm,
+        cfop: itemXml.cfop,
+        xmlDocumento: {
+          id: doc.id,
+          tipoDocumento: doc.tipoDocumento,
+          destinatarioCpfCnpj: doc.destinatarioCpfCnpj,
+          destinatarioNome: doc.destinatarioNome,
+          emitenteCpfCnpj: doc.emitenteCpfCnpj,
+          emitenteNome: doc.emitenteNome,
+          statusXml: doc.statusXml,
+        },
+      })),
   );
 
   let totalResultados = 0;
@@ -882,7 +1197,8 @@ export async function gerarParametrizacaoDoLote(params: {
 
   for (const item of lote.itensPlanilha) {
     const resultadoProcessado =
-      lote.resultadosProcessamento.find((r) => r.itemPlanilhaId === item.id) ?? null;
+      lote.resultadosProcessamento.find((r) => r.itemPlanilhaId === item.id) ??
+      null;
 
     const itensXmlDoProduto = obterItensXmlRelacionados({
       codigoItemOuServico: item.codigoItemOuServico,
@@ -893,7 +1209,9 @@ export async function gerarParametrizacaoDoLote(params: {
     const primeiroItemXml = itensXmlDoProduto[0] ?? null;
 
     const evidenciasDoItem = lote.evidenciasOperacao.filter(
-      (e) => e.itemPlanilhaId === item.id || (primeiroItemXml?.id && e.itemXmlId === primeiroItemXml.id),
+      (e) =>
+        e.itemPlanilhaId === item.id ||
+        (primeiroItemXml?.id && e.itemXmlId === primeiroItemXml.id),
     );
 
     const ncmEfetivo = resolverNcmEfetivo({
@@ -919,8 +1237,10 @@ export async function gerarParametrizacaoDoLote(params: {
         cfop: cfopEfetivo,
         descricao: item.descricaoItemOuServico,
         clienteCpfCnpj: lote.cliente.cpfCnpj,
-        destinatarioCpfCnpj: primeiroItemXml?.xmlDocumento.destinatarioCpfCnpj ?? null,
-        destinatarioNome: primeiroItemXml?.xmlDocumento.destinatarioNome ?? null,
+        destinatarioCpfCnpj:
+          primeiroItemXml?.xmlDocumento.destinatarioCpfCnpj ?? null,
+        destinatarioNome:
+          primeiroItemXml?.xmlDocumento.destinatarioNome ?? null,
         operacoesFiscais,
         evidencias: evidenciasDoItem,
       });
@@ -929,6 +1249,8 @@ export async function gerarParametrizacaoDoLote(params: {
         loteId: lote.id,
         itemPlanilhaId: item.id,
         itemXmlId: primeiroItemXml?.id ?? null,
+        clienteId: lote.cliente.id,
+        atividadePrincipalCliente: lote.cliente.atividadePrincipal,
         ncm: ncmEfetivo,
         cfop: cfopEfetivo,
         descricao: item.descricaoItemOuServico,
@@ -959,8 +1281,10 @@ export async function gerarParametrizacaoDoLote(params: {
             loteId: lote.id,
             itemPlanilhaId: item.id,
             operacaoFiscalId: classificacaoOperacao.operacaoFiscalId,
-            motivoRevisao: motor.motivoRevisao ?? "Caso sem fechamento automático.",
-            tipoAmbiguidade: motor.tipoAmbiguidade ?? "SEM_REGRA_VENCEDORA",
+            motivoRevisao:
+              motor.motivoRevisao ?? "Caso sem fechamento automático.",
+            tipoAmbiguidade:
+              motor.tipoAmbiguidade ?? "SEM_REGRA_VENCEDORA",
             dadosFaltantes:
               !ncmEfetivo && !cfopEfetivo
                 ? "NCM efetivo; CFOP efetivo"
@@ -969,7 +1293,8 @@ export async function gerarParametrizacaoDoLote(params: {
                   : !cfopEfetivo
                     ? "CFOP efetivo"
                     : null,
-            sugestaoMotor: motor.sugestaoMotor ?? classificacaoOperacao.codigoOperacao,
+            sugestaoMotor:
+              motor.sugestaoMotor ?? classificacaoOperacao.codigoOperacao,
             responsavel: params.responsavel,
           },
         });
