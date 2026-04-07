@@ -16,19 +16,13 @@ type ResumoSolicitacao = {
 };
 
 function getResend() {
-  if (!process.env.RESEND_API_KEY) {
-    throw new Error("RESEND_API_KEY não configurada");
-  }
+  if (!process.env.RESEND_API_KEY) throw new Error("RESEND_API_KEY não configurada");
   return new Resend(process.env.RESEND_API_KEY);
 }
 
 function checkConfig() {
-  if (!process.env.RESEND_API_KEY) {
-    throw new Error("RESEND_API_KEY não configurada");
-  }
-  if (!process.env.EMAIL_FROM) {
-    throw new Error("EMAIL_FROM não configurado");
-  }
+  if (!process.env.RESEND_API_KEY) throw new Error("RESEND_API_KEY não configurada");
+  if (!process.env.EMAIL_FROM) throw new Error("EMAIL_FROM não configurado");
 }
 
 function escapeHtml(valor?: string | number | null) {
@@ -82,7 +76,7 @@ function montarBotao(label: string, href: string, background: string) {
 export async function enviarEmailSolicitacaoCliente({ para, nomeCliente, protocolo, resumo, anexoBase64, nomeArquivo }: { para: string; nomeCliente: string; protocolo: string; resumo?: ResumoSolicitacao; anexoBase64: string; nomeArquivo: string; }) {
   checkConfig();
   const resend = getResend();
-  const { data, error } = await getResend().emails.send({
+  const { data, error } = await resend.emails.send({
     from: process.env.EMAIL_FROM!,
     to: [para],
     subject: `Recebemos sua documentação - Protocolo ${protocolo}`,
@@ -96,7 +90,7 @@ export async function enviarEmailSolicitacaoCliente({ para, nomeCliente, protoco
 export async function enviarEmailRelatorioSuporte({ para, protocolo, loteId, cliente, documento, emailCliente, modoDocumentacao, resumo, anexoBase64, nomeArquivo }: { para: string; protocolo: string; loteId?: string; cliente: string; documento?: string; emailCliente?: string | null; modoDocumentacao?: string; resumo?: ResumoSolicitacao; anexoBase64: string; nomeArquivo: string; }) {
   checkConfig();
   const resend = getResend();
-  const { data, error } = await getResend().emails.send({
+  const { data, error } = await resend.emails.send({
     from: process.env.EMAIL_FROM!,
     to: [para],
     subject: `Relatório lote ${protocolo}`,
@@ -113,10 +107,28 @@ export async function enviarEmailOrcamentoCliente({ para, nomeCliente, protocolo
   const observacaoFinal = observacaoOrcamento ?? observacao ?? undefined;
   const appUrl = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
   const token = encodeURIComponent(tokenAcaoOrcamento);
-  const { data, error } = await getResend().emails.send({
+  const linkProsseguir = `${appUrl}/pagamento?token=${token}`;
+  const linkTesteProcessamento = `${appUrl}/api/teste-iniciar-processamento?token=${token}`;
+  const linkRecusar = `${appUrl}/api/recusar-orcamento?token=${token}`;
+  const { data, error } = await resend.emails.send({
     from: process.env.EMAIL_FROM!,
     to: [para],
     subject: `Orçamento disponível - ${protocolo}`,
-    html: montarLayoutEmail("Orçamento disponível", `<p>Olá, ${escapeHtml(nomeCliente)}</p><p><strong>Protocolo:</strong> ${escapeHtml(protocolo)}</p>${itensCobraveis !== undefined ? `<p><strong>Itens cobráveis:</strong> ${itensCobraveis}</p>` : ""}${itensComRessalva !== undefined ? `<p><strong>Itens com ressalva:</strong> ${itensComRessalva}</p>` : ""}${itensImprecisos !== undefined ? `<p><strong>Itens imprecisos:</strong> ${itensImprecisos}</p>` : ""}<p><strong>Valor total:</strong> ${formatarMoeda(valorTotal)}</p>${observacaoFinal ? `<p>${escapeHtml(observacaoFinal)}</p>` : ""}${montarBotao("Prosseguir para pagamento", `${appUrl}/pagamento?token=${token}`, "#16a34a")}${montarBotao("Recusar orçamento", `${appUrl}/api/recusar-orcamento?token=${token}`, "#dc2626")}`),
+    html: montarLayoutEmail("Orçamento disponível", `
+      <p>Olá, ${escapeHtml(nomeCliente)}</p>
+      <p><strong>Protocolo:</strong> ${escapeHtml(protocolo)}</p>
+      ${itensCobraveis !== undefined ? `<p><strong>Itens cobráveis:</strong> ${itensCobraveis}</p>` : ""}
+      ${itensComRessalva !== undefined ? `<p><strong>Itens com ressalva:</strong> ${itensComRessalva}</p>` : ""}
+      ${itensImprecisos !== undefined ? `<p><strong>Itens imprecisos:</strong> ${itensImprecisos}</p>` : ""}
+      <p><strong>Valor total:</strong> ${formatarMoeda(valorTotal)}</p>
+      ${observacaoFinal ? `<p>${escapeHtml(observacaoFinal)}</p>` : ""}
+      <div style="margin-top:24px;">
+        ${montarBotao("Prosseguir para pagamento", linkProsseguir, "#16a34a")}
+        ${montarBotao("Teste iniciar processamento", linkTesteProcessamento, "#2563eb")}
+        ${montarBotao("Recusar orçamento", linkRecusar, "#dc2626")}
+      </div>
+    `),
   });
   if (error) throw new Error(error.message);
+  return data;
+}
