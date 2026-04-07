@@ -83,7 +83,7 @@ function montarBotao(label: string, href: string, background: string) {
 export async function enviarEmailSolicitacaoCliente({ para, nomeCliente, protocolo, resumo, anexoBase64, nomeArquivo }: { para: string; nomeCliente: string; protocolo: string; resumo?: ResumoSolicitacao; anexoBase64: string; nomeArquivo: string; }) {
   checkConfig();
   const resend = getResend();
-  const { data, error } = await resend.emails.send({
+  const { data, error } = await getResend().emails.send({
     from: process.env.EMAIL_FROM!,
     to: [para],
     subject: `Recebemos sua documentação - Protocolo ${protocolo}`,
@@ -97,7 +97,7 @@ export async function enviarEmailSolicitacaoCliente({ para, nomeCliente, protoco
 export async function enviarEmailRelatorioSuporte({ para, protocolo, loteId, cliente, documento, emailCliente, modoDocumentacao, resumo, anexoBase64, nomeArquivo }: { para: string; protocolo: string; loteId?: string; cliente: string; documento?: string; emailCliente?: string | null; modoDocumentacao?: string; resumo?: ResumoSolicitacao; anexoBase64: string; nomeArquivo: string; }) {
   checkConfig();
   const resend = getResend();
-  const { data, error } = await resend.emails.send({
+  const { data, error } = await getResend().emails.send({
     from: process.env.EMAIL_FROM!,
     to: [para],
     subject: `Relatório lote ${protocolo}`,
@@ -114,7 +114,7 @@ export async function enviarEmailOrcamentoCliente({ para, nomeCliente, protocolo
   const observacaoFinal = observacaoOrcamento ?? observacao ?? undefined;
   const appUrl = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
   const token = encodeURIComponent(tokenAcaoOrcamento);
-  const { data, error } = await resend.emails.send({
+  const { data, error } = await getResend().emails.send({
     from: process.env.EMAIL_FROM!,
     to: [para],
     subject: `Orçamento disponível - ${protocolo}`,
