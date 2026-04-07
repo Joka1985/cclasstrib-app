@@ -122,5 +122,4 @@ export async function enviarEmailOrcamentoCliente({ para, nomeCliente, protocolo
   if (error) throw new Error(error.message);
   return data;
 }
-EOF
-echo "✅ lib/email.ts corrigido"
+
