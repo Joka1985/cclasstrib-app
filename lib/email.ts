@@ -1,4 +1,3 @@
-cat > /workspaces/cclasstrib-app/lib/email.ts << 'EOF'
 import { Resend } from "resend";
 
 type ResumoSolicitacao = {
@@ -121,7 +120,3 @@ export async function enviarEmailOrcamentoCliente({ para, nomeCliente, protocolo
     html: montarLayoutEmail("Orçamento disponível", `<p>Olá, ${escapeHtml(nomeCliente)}</p><p><strong>Protocolo:</strong> ${escapeHtml(protocolo)}</p>${itensCobraveis !== undefined ? `<p><strong>Itens cobráveis:</strong> ${itensCobraveis}</p>` : ""}${itensComRessalva !== undefined ? `<p><strong>Itens com ressalva:</strong> ${itensComRessalva}</p>` : ""}${itensImprecisos !== undefined ? `<p><strong>Itens imprecisos:</strong> ${itensImprecisos}</p>` : ""}<p><strong>Valor total:</strong> ${formatarMoeda(valorTotal)}</p>${observacaoFinal ? `<p>${escapeHtml(observacaoFinal)}</p>` : ""}${montarBotao("Prosseguir para pagamento", `${appUrl}/pagamento?token=${token}`, "#16a34a")}${montarBotao("Recusar orçamento", `${appUrl}/api/recusar-orcamento?token=${token}`, "#dc2626")}`),
   });
   if (error) throw new Error(error.message);
-  return data;
-}
-EOF
-echo "✅ lib/email.ts corrigido"
