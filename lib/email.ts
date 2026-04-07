@@ -1,4 +1,3 @@
-cat > /workspaces/cclasstrib-app/lib/email.ts << 'EOF'
 import { Resend } from "resend";
 
 type ResumoSolicitacao = {
