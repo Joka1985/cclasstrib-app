@@ -1,6 +1,26 @@
-type ResultadoAuditoria = {
-  statusAuditoria: "✅ CORRETO" | "❌ ERRO" | "⚠️ REVISÃO";
+/**
+ * auditoria-classificacao.ts
+ *
+ * Aplica regras de auditoria em cada linha e calcula
+ * o índice de precisão do lote para classificar a entrega
+ * como SEM RESSALVA ou COM RESSALVA.
+ */
+
+export type StatusAuditoria = "✅ CORRETO" | "❌ ERRO" | "⚠️ REVISÃO";
+
+export type ResultadoAuditoria = {
+  statusAuditoria: StatusAuditoria;
   apontamento: string;
+};
+
+export type IndiceAuditoria = {
+  totalItens: number;
+  totalCorretos: number;
+  totalErros: number;
+  totalRevisao: number;
+  precisao: number; // 0-100
+  entregaComRessalva: boolean;
+  resumo: string;
 };
 
 export function auditarClassificacao(params: {
@@ -17,7 +37,6 @@ export function auditarClassificacao(params: {
 
   // ── ERROS CONFIRMADOS ────────────────────────────────────────────────────
 
-  // Sal iodado NCM 2501.00.20 ou 2501.00.90 → deve ser CST 200 / 200003
   if ((ncm === "25010020" || ncm === "25010090") && cst === "000") {
     return {
       statusAuditoria: "❌ ERRO",
@@ -26,7 +45,6 @@ export function auditarClassificacao(params: {
     };
   }
 
-  // Bagaço de cana NCM 2303 → deve ser CST 200 / 200038
   if (ncm.startsWith("2303") && cst === "000") {
     return {
       statusAuditoria: "❌ ERRO",
@@ -37,16 +55,14 @@ export function auditarClassificacao(params: {
 
   // ── REVISÃO E CONFIRMAÇÃO ─────────────────────────────────────────────────
 
-  // Etanol CFOP 5910 → confirmar natureza da operação
   if (ncm.startsWith("2207") && cfop === "5910") {
     return {
       statusAuditoria: "⚠️ REVISÃO",
       apontamento:
-        "Etanol com CFOP 5910 (bonificação/doação). Confirmar com cliente: se for venda onerosa de combustível, correto seria CST 620 / 620001 (monofásico, Art. 172).",
+        "Etanol com CFOP 5910 (bonificação/doação). Confirmar: se for venda onerosa de combustível, correto seria CST 620 / 620001 (monofásico, Art. 172).",
     };
   }
 
-  // Queijo fatiado NCM 2106 → confirmar NCM correto
   if (
     ncm.startsWith("2106") &&
     cst === "000" &&
@@ -55,29 +71,26 @@ export function auditarClassificacao(params: {
     return {
       statusAuditoria: "⚠️ REVISÃO",
       apontamento:
-        "Queijo classificado no cap. 21 (preparações). Se for queijo natural, NCM correto seria cap. 04 (CST 200 / 200034). Confirmar NCM com fornecedor.",
+        "Queijo classificado no cap. 21 (preparações). Se for queijo natural, NCM correto seria cap. 04 — confirmar com fornecedor.",
     };
   }
 
-  // Bicarbonato de sódio NCM 2836.30 → confirmar uso
   if (ncm === "28363000" && cst === "000") {
     return {
       statusAuditoria: "⚠️ REVISÃO",
       apontamento:
-        "Bicarbonato NCM 2836.30.00 consta no Anexo VI como componente de nutrição enteral. Se uso for industrial/doméstico, CST 000 está correto. Confirmar destinação.",
+        "Bicarbonato NCM 2836.30 consta no Anexo VI como componente de nutrição enteral. Se uso for industrial/doméstico, CST 000 está correto — confirmar destinação.",
     };
   }
 
-  // Óleo mineral NCM 2710 → confirmar uso agrícola ou industrial
   if (ncm.startsWith("2710") && cst === "000") {
     return {
       statusAuditoria: "⚠️ REVISÃO",
       apontamento:
-        "Óleo mineral NCM 2710. Se destinado como insumo agropecuário (lubrificante agrícola), pode ter redução Anexo IX. Se uso industrial geral, CST 000 está correto. Confirmar destinação.",
+        "Óleo mineral NCM 2710. Se destinado como insumo agropecuário pode ter redução Anexo IX. Se uso industrial, CST 000 está correto — confirmar destinação.",
     };
   }
 
-  // Refresco/bebida em pó NCM 2106 → confirmar subposição
   if (
     ncm.startsWith("2106") &&
     cst === "000" &&
@@ -86,11 +99,10 @@ export function auditarClassificacao(params: {
     return {
       statusAuditoria: "⚠️ REVISÃO",
       apontamento:
-        "Preparação em pó para bebida NCM 2106. Confirmar subposição exata. Se contiver vitaminas com finalidade específica pode haver enquadramento diferente.",
+        "Preparação em pó para bebida NCM 2106. Confirmar subposição exata — pode haver enquadramento diferente dependendo da composição.",
     };
   }
 
-  // Steak empanado NCM 1602 → provavelmente correto
   if (ncm.startsWith("1602") && cst === "000") {
     return {
       statusAuditoria: "⚠️ REVISÃO",
@@ -99,9 +111,47 @@ export function auditarClassificacao(params: {
     };
   }
 
-  // ── CORRETO ───────────────────────────────────────────────────────────────
   return {
     statusAuditoria: "✅ CORRETO",
     apontamento: "",
+  };
+}
+
+export function calcularIndiceAuditoria(
+  resultados: ResultadoAuditoria[]
+): IndiceAuditoria {
+  const totalItens = resultados.length;
+  const totalErros = resultados.filter((r) => r.statusAuditoria === "❌ ERRO").length;
+  const totalRevisao = resultados.filter((r) => r.statusAuditoria === "⚠️ REVISÃO").length;
+  const totalCorretos = totalItens - totalErros - totalRevisao;
+
+  // Precisão: itens sem erro ou revisão / total
+  // Erros pesam 100%, revisões pesam 50% na penalização
+  const penalizacao = totalErros * 1.0 + totalRevisao * 0.5;
+  const precisao = totalItens > 0
+    ? Math.max(0, Math.round(((totalItens - penalizacao) / totalItens) * 100))
+    : 100;
+
+  const entregaComRessalva = totalErros > 0 || totalRevisao > 0;
+
+  let resumo: string;
+  if (!entregaComRessalva) {
+    resumo = `Entrega SEM RESSALVA — precisão 100% (${totalItens} itens auditados).`;
+  } else if (totalErros > 0 && totalRevisao > 0) {
+    resumo = `Entrega COM RESSALVA — precisão ${precisao}% | ${totalErros} erro(s) confirmado(s) e ${totalRevisao} item(ns) para revisão em ${totalItens} auditados.`;
+  } else if (totalErros > 0) {
+    resumo = `Entrega COM RESSALVA — precisão ${precisao}% | ${totalErros} erro(s) confirmado(s) em ${totalItens} itens auditados.`;
+  } else {
+    resumo = `Entrega COM RESSALVA — precisão ${precisao}% | ${totalRevisao} item(ns) requer(em) confirmação em ${totalItens} auditados.`;
+  }
+
+  return {
+    totalItens,
+    totalCorretos,
+    totalErros,
+    totalRevisao,
+    precisao,
+    entregaComRessalva,
+    resumo,
   };
 }

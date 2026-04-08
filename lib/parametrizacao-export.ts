@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import { auditarClassificacao } from "@/lib/auditoria-classificacao";
+import { auditarClassificacao, calcularIndiceAuditoria } from "@/lib/auditoria-classificacao";
 
 export type LinhaParametrizacaoFinal = {
   codProduto: string;
@@ -62,34 +62,39 @@ export function gerarWorkbookParametrizacao(params: {
 }) {
   const wb = XLSX.utils.book_new();
 
-  const linhasParametrizacao = params.parametrizacaoFinal.map((item) => {
-    const { statusAuditoria, apontamento } = auditarClassificacao({
+  // Auditar cada item
+  const auditorias = params.parametrizacaoFinal.map((item) =>
+    auditarClassificacao({
       ncm: item.ncm,
       cfop: item.cfop,
       cst: item.cst,
       cclassTrib: item.cclassTrib,
       descricao: item.descricao,
-    });
+    })
+  );
 
-    return {
-      "CÓD_PRODUTO": item.codProduto,
-      "DESCRIÇÃO": item.descricao,
-      "NCM": item.ncm ?? "",
-      "CFOP": item.cfop ?? "",
-      "CST": item.cst ?? "",
-      "cClassTrib": item.cclassTrib ?? "",
-      "DESC_cClassTrib": item.descCclassTrib ?? "",
-      "TIPO_ALÍQUOTA": item.tipoAliquota ?? "",
-      "pRedIBS%": normalizarNumero(item.pRedIbs),
-      "pRedCBS%": normalizarNumero(item.pRedCbs),
-      "ARTIGO_LC214": item.artigoLc214 ?? "",
-      "OBSERVAÇÕES": item.observacoes ?? "",
-      "DATA": formatarData(item.dataReferencia),
-      "RESPONSÁVEL": item.responsavel ?? "",
-      "STATUS_AUDITORIA": statusAuditoria,
-      "APONTAMENTO_AUDITORIA": apontamento,
-    };
-  });
+  // Calcular índice geral
+  const indice = calcularIndiceAuditoria(auditorias);
+
+  // Montar linhas com colunas de auditoria
+  const linhasParametrizacao = params.parametrizacaoFinal.map((item, i) => ({
+    "CÓD_PRODUTO": item.codProduto,
+    "DESCRIÇÃO": item.descricao,
+    "NCM": item.ncm ?? "",
+    "CFOP": item.cfop ?? "",
+    "CST": item.cst ?? "",
+    "cClassTrib": item.cclassTrib ?? "",
+    "DESC_cClassTrib": item.descCclassTrib ?? "",
+    "TIPO_ALÍQUOTA": item.tipoAliquota ?? "",
+    "pRedIBS%": normalizarNumero(item.pRedIbs),
+    "pRedCBS%": normalizarNumero(item.pRedCbs),
+    "ARTIGO_LC214": item.artigoLc214 ?? "",
+    "OBSERVAÇÕES": item.observacoes ?? "",
+    "DATA": formatarData(item.dataReferencia),
+    "RESPONSÁVEL": item.responsavel ?? "",
+    "STATUS_AUDITORIA": auditorias[i].statusAuditoria,
+    "APONTAMENTO_AUDITORIA": auditorias[i].apontamento,
+  }));
 
   const linhasAmbiguidade = params.cenariosAmbiguidade.map((item) => ({
     "CÓD_PRODUTO": item.codProduto,
@@ -102,39 +107,57 @@ export function gerarWorkbookParametrizacao(params: {
     "RESULTADO": item.resultado ?? "",
   }));
 
-  const wsParametrizacao = XLSX.utils.json_to_sheet(
-    linhasParametrizacao.length
-      ? linhasParametrizacao
-      : [
-          {
-            "CÓD_PRODUTO": "", "DESCRIÇÃO": "", "NCM": "", "CFOP": "",
-            "CST": "", "cClassTrib": "", "DESC_cClassTrib": "",
-            "TIPO_ALÍQUOTA": "", "pRedIBS%": "", "pRedCBS%": "",
-            "ARTIGO_LC214": "", "OBSERVAÇÕES": "", "DATA": "",
-            "RESPONSÁVEL": "", "STATUS_AUDITORIA": "", "APONTAMENTO_AUDITORIA": "",
-          },
-        ]
-  );
+  // Aba PARAMETRIZACAO_FINAL — linha de resumo no topo antes dos dados
+  const linhaResumo = [{
+    "CÓD_PRODUTO": "AUDITORIA cClassTrib",
+    "DESCRIÇÃO": indice.resumo,
+    "NCM": `Precisão: ${indice.precisao}%`,
+    "CFOP": `Erros: ${indice.totalErros}`,
+    "CST": `Revisão: ${indice.totalRevisao}`,
+    "cClassTrib": `Corretos: ${indice.totalCorretos}`,
+    "DESC_cClassTrib": `Total: ${indice.totalItens}`,
+    "TIPO_ALÍQUOTA": "",
+    "pRedIBS%": "",
+    "pRedCBS%": "",
+    "ARTIGO_LC214": "",
+    "OBSERVAÇÕES": "",
+    "DATA": formatarData(new Date()),
+    "RESPONSÁVEL": "cClassTrib Auditoria",
+    "STATUS_AUDITORIA": indice.entregaComRessalva ? "COM RESSALVA" : "SEM RESSALVA",
+    "APONTAMENTO_AUDITORIA": indice.resumo,
+  }];
 
+  const todasLinhas = [
+    ...(linhasParametrizacao.length ? linhaResumo : []),
+    ...(linhasParametrizacao.length
+      ? linhasParametrizacao
+      : [{
+          "CÓD_PRODUTO": "", "DESCRIÇÃO": "", "NCM": "", "CFOP": "",
+          "CST": "", "cClassTrib": "", "DESC_cClassTrib": "",
+          "TIPO_ALÍQUOTA": "", "pRedIBS%": "", "pRedCBS%": "",
+          "ARTIGO_LC214": "", "OBSERVAÇÕES": "", "DATA": "",
+          "RESPONSÁVEL": "", "STATUS_AUDITORIA": "", "APONTAMENTO_AUDITORIA": "",
+        }]),
+  ];
+
+  const wsParametrizacao = XLSX.utils.json_to_sheet(todasLinhas);
   const wsAmbiguidade = XLSX.utils.json_to_sheet(
     linhasAmbiguidade.length
       ? linhasAmbiguidade
-      : [
-          {
-            "CÓD_PRODUTO": "", "PRODUTO/CENÁRIO": "", "OPERAÇÃO": "",
-            "CFOP": "", "CST": "", "cClassTrib": "",
-            "FUNDAMENTAÇÃO": "", "RESULTADO": "",
-          },
-        ]
+      : [{
+          "CÓD_PRODUTO": "", "PRODUTO/CENÁRIO": "", "OPERAÇÃO": "",
+          "CFOP": "", "CST": "", "cClassTrib": "",
+          "FUNDAMENTAÇÃO": "", "RESULTADO": "",
+        }]
   );
 
-  autoFitColumns(wsParametrizacao, linhasParametrizacao);
+  autoFitColumns(wsParametrizacao, todasLinhas);
   autoFitColumns(wsAmbiguidade, linhasAmbiguidade);
 
   XLSX.utils.book_append_sheet(wb, wsParametrizacao, "PARAMETRIZACAO_FINAL");
   XLSX.utils.book_append_sheet(wb, wsAmbiguidade, "CENARIOS_AMBIGUIDADE");
 
-  return wb;
+  return { wb, indice };
 }
 
 export function gerarArquivoParametrizacaoXlsx(params: {
@@ -142,21 +165,23 @@ export function gerarArquivoParametrizacaoXlsx(params: {
   parametrizacaoFinal: LinhaParametrizacaoFinal[];
   cenariosAmbiguidade: LinhaAmbiguidade[];
 }) {
-  const workbook = gerarWorkbookParametrizacao({
+  const { wb, indice } = gerarWorkbookParametrizacao({
     parametrizacaoFinal: params.parametrizacaoFinal,
     cenariosAmbiguidade: params.cenariosAmbiguidade,
   });
 
-  const buffer = XLSX.write(workbook, {
+  const buffer = XLSX.write(wb, {
     type: "buffer",
     bookType: "xlsx",
   }) as Buffer;
 
-  const nomeArquivo = `parametrizacao-cclasstrib-${params.protocolo}.xlsx`;
+  const sufixo = indice.entregaComRessalva ? "COM-RESSALVA" : "SEM-RESSALVA";
+  const nomeArquivo = `parametrizacao-cclasstrib-${params.protocolo}-${sufixo}.xlsx`;
 
   return {
     nomeArquivo,
     buffer,
     arquivoBase64: buffer.toString("base64"),
+    indice,
   };
 }
