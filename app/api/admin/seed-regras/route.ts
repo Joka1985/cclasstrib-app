@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
 
     // Bases faltantes
     const basesFaltantes = [
+      { cst: "200", cc: "200038", nome: "Insumos agropecuários e aquícolas (Anexo IX)", art: "Art. 138", red: 60, anexo: "9", desc: "Insumos agropecuários e aquícolas relacionados no Anexo IX da LC 214/2025." },
       { cst: "200", cc: "200034", nome: "Fornecimento dos alimentos destinados ao consumo humano (Anexo VII)", art: "Art. 135", red: 60, anexo: "7", desc: "Alimentos destinados ao consumo humano — Anexo VII da LC 214/2025." },
       { cst: "200", cc: "200035", nome: "Fornecimento dos produtos de higiene pessoal e limpeza (Anexo VIII)", art: "Art. 136", red: 60, anexo: "8", desc: "Produtos de higiene pessoal e limpeza — Anexo VIII da LC 214/2025." },
       { cst: "200", cc: "200036", nome: "Fornecimento de produtos agropecuários in natura", art: "Art. 137", red: 60, anexo: null, desc: "Produtos agropecuários, aquícolas, pesqueiros, florestais e extrativistas vegetais in natura." },
@@ -79,6 +80,8 @@ export async function POST(req: NextRequest) {
 
     // Regras de anexo contextual
     const regras = [
+      { cod: "RAC-2501-SAL-IODADO", nome: "Sal iodado — Cesta Básica Anexo I", ini: "25010000", fim: "25019999", cc: "200003", art: "Art. 125", pri: 1 },
+      { cod: "RAC-2303-BAGACO-CANA", nome: "Bagaço de cana — Anexo IX insumo agropecuário", ini: "23030000", fim: "23039999", cc: "200038", art: "Art. 138", pri: 1 },
       { cod: "RAC-0401-LATICINIOS", nome: "Laticínios — Anexo VII", ini: "04010000", fim: "04069999", cc: "200034", art: "Art. 135", pri: 10 },
       { cod: "RAC-0201-CARNES", nome: "Carnes — Anexo VII", ini: "02010000", fim: "02109999", cc: "200034", art: "Art. 135", pri: 10 },
       { cod: "RAC-0301-PEIXES", nome: "Peixes — Anexo VII", ini: "03010000", fim: "03079999", cc: "200034", art: "Art. 135", pri: 10 },

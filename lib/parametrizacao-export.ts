@@ -47,8 +47,7 @@ function autoFitColumns(sheet: XLSX.WorkSheet, rows: Record<string, unknown>[]) 
   const widths = headers.map((header) => {
     let max = header.length;
     for (const row of rows) {
-      const cellValue = row[header];
-      const size = String(cellValue ?? "").length;
+      const size = String(row[header] ?? "").length;
       if (size > max) max = size;
     }
     return { wch: Math.min(Math.max(max + 2, 12), 60) };
@@ -62,7 +61,6 @@ export function gerarWorkbookParametrizacao(params: {
 }) {
   const wb = XLSX.utils.book_new();
 
-  // Auditar cada item
   const auditorias = params.parametrizacaoFinal.map((item) =>
     auditarClassificacao({
       ncm: item.ncm,
@@ -73,10 +71,10 @@ export function gerarWorkbookParametrizacao(params: {
     })
   );
 
-  // Calcular índice geral
   const indice = calcularIndiceAuditoria(auditorias);
 
-  // Montar linhas com colunas de auditoria
+  // Exporta os campos ORIGINAIS do banco — sem correção aqui
+  // A classificação correta deve vir do motor após o seed populado
   const linhasParametrizacao = params.parametrizacaoFinal.map((item, i) => ({
     "CÓD_PRODUTO": item.codProduto,
     "DESCRIÇÃO": item.descricao,
@@ -107,8 +105,7 @@ export function gerarWorkbookParametrizacao(params: {
     "RESULTADO": item.resultado ?? "",
   }));
 
-  // Aba PARAMETRIZACAO_FINAL — linha de resumo no topo antes dos dados
-  const linhaResumo = [{
+  const linhaResumo = linhasParametrizacao.length ? [{
     "CÓD_PRODUTO": "AUDITORIA cClassTrib",
     "DESCRIÇÃO": indice.resumo,
     "NCM": `Precisão: ${indice.precisao}%`,
@@ -125,30 +122,25 @@ export function gerarWorkbookParametrizacao(params: {
     "RESPONSÁVEL": "cClassTrib Auditoria",
     "STATUS_AUDITORIA": indice.entregaComRessalva ? "COM RESSALVA" : "SEM RESSALVA",
     "APONTAMENTO_AUDITORIA": indice.resumo,
-  }];
+  }] : [];
 
   const todasLinhas = [
-    ...(linhasParametrizacao.length ? linhaResumo : []),
-    ...(linhasParametrizacao.length
-      ? linhasParametrizacao
-      : [{
-          "CÓD_PRODUTO": "", "DESCRIÇÃO": "", "NCM": "", "CFOP": "",
-          "CST": "", "cClassTrib": "", "DESC_cClassTrib": "",
-          "TIPO_ALÍQUOTA": "", "pRedIBS%": "", "pRedCBS%": "",
-          "ARTIGO_LC214": "", "OBSERVAÇÕES": "", "DATA": "",
-          "RESPONSÁVEL": "", "STATUS_AUDITORIA": "", "APONTAMENTO_AUDITORIA": "",
-        }]),
+    ...linhaResumo,
+    ...(linhasParametrizacao.length ? linhasParametrizacao : [{
+      "CÓD_PRODUTO": "", "DESCRIÇÃO": "", "NCM": "", "CFOP": "",
+      "CST": "", "cClassTrib": "", "DESC_cClassTrib": "",
+      "TIPO_ALÍQUOTA": "", "pRedIBS%": "", "pRedCBS%": "",
+      "ARTIGO_LC214": "", "OBSERVAÇÕES": "", "DATA": "",
+      "RESPONSÁVEL": "", "STATUS_AUDITORIA": "", "APONTAMENTO_AUDITORIA": "",
+    }]),
   ];
 
   const wsParametrizacao = XLSX.utils.json_to_sheet(todasLinhas);
   const wsAmbiguidade = XLSX.utils.json_to_sheet(
-    linhasAmbiguidade.length
-      ? linhasAmbiguidade
-      : [{
-          "CÓD_PRODUTO": "", "PRODUTO/CENÁRIO": "", "OPERAÇÃO": "",
-          "CFOP": "", "CST": "", "cClassTrib": "",
-          "FUNDAMENTAÇÃO": "", "RESULTADO": "",
-        }]
+    linhasAmbiguidade.length ? linhasAmbiguidade : [{
+      "CÓD_PRODUTO": "", "PRODUTO/CENÁRIO": "", "OPERAÇÃO": "",
+      "CFOP": "", "CST": "", "cClassTrib": "", "FUNDAMENTAÇÃO": "", "RESULTADO": "",
+    }]
   );
 
   autoFitColumns(wsParametrizacao, todasLinhas);
@@ -170,18 +162,9 @@ export function gerarArquivoParametrizacaoXlsx(params: {
     cenariosAmbiguidade: params.cenariosAmbiguidade,
   });
 
-  const buffer = XLSX.write(wb, {
-    type: "buffer",
-    bookType: "xlsx",
-  }) as Buffer;
-
+  const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
   const sufixo = indice.entregaComRessalva ? "COM-RESSALVA" : "SEM-RESSALVA";
   const nomeArquivo = `parametrizacao-cclasstrib-${params.protocolo}-${sufixo}.xlsx`;
 
-  return {
-    nomeArquivo,
-    buffer,
-    arquivoBase64: buffer.toString("base64"),
-    indice,
-  };
+  return { nomeArquivo, buffer, arquivoBase64: buffer.toString("base64"), indice };
 }
