@@ -36,6 +36,12 @@ export default function UploadPlanilhaPage() {
       return;
     }
 
+    // Validação preventiva do tamanho antes do upload
+    if (arquivo.size > 5 * 1024 * 1024) {
+      setMensagem("Arquivo muito grande. O limite é 5 MB. Divida a planilha em arquivos menores de até 1.000 itens.");
+      return;
+    }
+
     setCarregando(true);
 
     try {
@@ -90,6 +96,13 @@ export default function UploadPlanilhaPage() {
             <label className="mb-2 block text-sm font-medium text-zinc-700">
               Arquivo da planilha
             </label>
+
+            <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <span className="font-semibold">⚠️ Limite de itens por arquivo:</span> a planilha deve conter no máximo{" "}
+              <span className="font-bold">1.000 itens</span> por envio. Planilhas maiores devem ser divididas por categoria
+              ou CFOP antes do upload. Arquivos acima de 5 MB serão rejeitados.
+            </div>
+
             <input
               type="file"
               accept=".xlsx,.xls,.csv"
