@@ -1195,7 +1195,19 @@ export async function gerarParametrizacaoDoLote(params: {
 
   const chavesJaGeradas = new Set<string>();
 
-  for (const item of lote.itensPlanilha) {
+  // Processamento em batches de 500 itens para evitar deadlock em lotes grandes
+  const BATCH_SIZE = 500;
+  const itensPlanilha = lote.itensPlanilha;
+
+  for (let batchStart = 0; batchStart < itensPlanilha.length; batchStart += BATCH_SIZE) {
+    const batch = itensPlanilha.slice(batchStart, batchStart + BATCH_SIZE);
+
+    // Pausa entre batches para liberar conexões do banco
+    if (batchStart > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+
+  for (const item of batch) {
     const resultadoProcessado =
       lote.resultadosProcessamento.find((r) => r.itemPlanilhaId === item.id) ??
       null;
@@ -1342,6 +1354,7 @@ export async function gerarParametrizacaoDoLote(params: {
       }
     }
   }
+  } // fim do batch
 
   await prisma.lote.update({
     where: { id: lote.id },
