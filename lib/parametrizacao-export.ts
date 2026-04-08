@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { auditarClassificacao } from "@/lib/auditoria-classificacao";
 
 export type LinhaParametrizacaoFinal = {
   codProduto: string;
@@ -50,9 +51,8 @@ function autoFitColumns(sheet: XLSX.WorkSheet, rows: Record<string, unknown>[]) 
       const size = String(cellValue ?? "").length;
       if (size > max) max = size;
     }
-    return { wch: Math.min(Math.max(max + 2, 12), 45) };
+    return { wch: Math.min(Math.max(max + 2, 12), 60) };
   });
-
   sheet["!cols"] = widths;
 }
 
@@ -62,22 +62,34 @@ export function gerarWorkbookParametrizacao(params: {
 }) {
   const wb = XLSX.utils.book_new();
 
-  const linhasParametrizacao = params.parametrizacaoFinal.map((item) => ({
-    "CÓD_PRODUTO": item.codProduto,
-    "DESCRIÇÃO": item.descricao,
-    "NCM": item.ncm ?? "",
-    "CFOP": item.cfop ?? "",
-    "CST": item.cst ?? "",
-    "cClassTrib": item.cclassTrib ?? "",
-    "DESC_cClassTrib": item.descCclassTrib ?? "",
-    "TIPO_ALÍQUOTA": item.tipoAliquota ?? "",
-    "pRedIBS%": normalizarNumero(item.pRedIbs),
-    "pRedCBS%": normalizarNumero(item.pRedCbs),
-    "ARTIGO_LC214": item.artigoLc214 ?? "",
-    "OBSERVAÇÕES": item.observacoes ?? "",
-    "DATA": formatarData(item.dataReferencia),
-    "RESPONSÁVEL": item.responsavel ?? "",
-  }));
+  const linhasParametrizacao = params.parametrizacaoFinal.map((item) => {
+    const { statusAuditoria, apontamento } = auditarClassificacao({
+      ncm: item.ncm,
+      cfop: item.cfop,
+      cst: item.cst,
+      cclassTrib: item.cclassTrib,
+      descricao: item.descricao,
+    });
+
+    return {
+      "CÓD_PRODUTO": item.codProduto,
+      "DESCRIÇÃO": item.descricao,
+      "NCM": item.ncm ?? "",
+      "CFOP": item.cfop ?? "",
+      "CST": item.cst ?? "",
+      "cClassTrib": item.cclassTrib ?? "",
+      "DESC_cClassTrib": item.descCclassTrib ?? "",
+      "TIPO_ALÍQUOTA": item.tipoAliquota ?? "",
+      "pRedIBS%": normalizarNumero(item.pRedIbs),
+      "pRedCBS%": normalizarNumero(item.pRedCbs),
+      "ARTIGO_LC214": item.artigoLc214 ?? "",
+      "OBSERVAÇÕES": item.observacoes ?? "",
+      "DATA": formatarData(item.dataReferencia),
+      "RESPONSÁVEL": item.responsavel ?? "",
+      "STATUS_AUDITORIA": statusAuditoria,
+      "APONTAMENTO_AUDITORIA": apontamento,
+    };
+  });
 
   const linhasAmbiguidade = params.cenariosAmbiguidade.map((item) => ({
     "CÓD_PRODUTO": item.codProduto,
@@ -95,20 +107,11 @@ export function gerarWorkbookParametrizacao(params: {
       ? linhasParametrizacao
       : [
           {
-            "CÓD_PRODUTO": "",
-            "DESCRIÇÃO": "",
-            "NCM": "",
-            "CFOP": "",
-            "CST": "",
-            "cClassTrib": "",
-            "DESC_cClassTrib": "",
-            "TIPO_ALÍQUOTA": "",
-            "pRedIBS%": "",
-            "pRedCBS%": "",
-            "ARTIGO_LC214": "",
-            "OBSERVAÇÕES": "",
-            "DATA": "",
-            "RESPONSÁVEL": "",
+            "CÓD_PRODUTO": "", "DESCRIÇÃO": "", "NCM": "", "CFOP": "",
+            "CST": "", "cClassTrib": "", "DESC_cClassTrib": "",
+            "TIPO_ALÍQUOTA": "", "pRedIBS%": "", "pRedCBS%": "",
+            "ARTIGO_LC214": "", "OBSERVAÇÕES": "", "DATA": "",
+            "RESPONSÁVEL": "", "STATUS_AUDITORIA": "", "APONTAMENTO_AUDITORIA": "",
           },
         ]
   );
@@ -118,14 +121,9 @@ export function gerarWorkbookParametrizacao(params: {
       ? linhasAmbiguidade
       : [
           {
-            "CÓD_PRODUTO": "",
-            "PRODUTO/CENÁRIO": "",
-            "OPERAÇÃO": "",
-            "CFOP": "",
-            "CST": "",
-            "cClassTrib": "",
-            "FUNDAMENTAÇÃO": "",
-            "RESULTADO": "",
+            "CÓD_PRODUTO": "", "PRODUTO/CENÁRIO": "", "OPERAÇÃO": "",
+            "CFOP": "", "CST": "", "cClassTrib": "",
+            "FUNDAMENTAÇÃO": "", "RESULTADO": "",
           },
         ]
   );
