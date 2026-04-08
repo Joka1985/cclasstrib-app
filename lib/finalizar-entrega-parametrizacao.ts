@@ -86,7 +86,7 @@ export async function finalizarEntregaParametrizacao(params: {
             : "FECHADO",
     }));
 
-  const { nomeArquivo, arquivoBase64 } = gerarArquivoParametrizacaoXlsx({
+  const { nomeArquivo, arquivoBase64, indice } = gerarArquivoParametrizacaoXlsx({
     protocolo: lote.protocolo ?? lote.id,
     parametrizacaoFinal,
     cenariosAmbiguidade,
@@ -97,6 +97,7 @@ export async function finalizarEntregaParametrizacao(params: {
 
   try {
     await enviarEmailEntregaParametrizacao({
+      indiceAuditoria: indice,
       para: lote.cliente.email,
       nomeCliente: lote.cliente.nomeRazaoSocial,
       protocolo: lote.protocolo ?? lote.id,
