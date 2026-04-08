@@ -7,8 +7,11 @@ function gerarProtocolo() {
   const mes = String(agora.getMonth() + 1).padStart(2, "0");
   const dia = String(agora.getDate()).padStart(2, "0");
   const aleatorio = Math.floor(1000 + Math.random() * 9000);
-
   return `ENV-${ano}${mes}${dia}-${aleatorio}`;
+}
+
+function normalizarCpfCnpj(valor: string) {
+  return valor.replace(/\D/g, "");
 }
 
 export async function POST(req: NextRequest) {
@@ -22,18 +25,41 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const cliente = await prisma.cliente.create({
-      data: {
-        tipoPessoa: body.tipoPessoa,
-        nomeRazaoSocial: body.nomeRazaoSocial,
-        cpfCnpj: body.cpfCnpj,
-        atividadePrincipal: `${body.cnaeCodigo} - ${body.cnaeDescricao}`,
-        email: body.email,
-        telefone: body.telefone ?? null,
-        uf: body.uf ?? null,
-      },
+    const cpfCnpj = normalizarCpfCnpj(body.cpfCnpj);
+
+    // Verificar se cliente já existe
+    let cliente = await prisma.cliente.findUnique({
+      where: { cpfCnpj },
     });
 
+    if (cliente) {
+      // Cliente já existe — atualizar dados e criar novo lote
+      cliente = await prisma.cliente.update({
+        where: { cpfCnpj },
+        data: {
+          nomeRazaoSocial: body.nomeRazaoSocial,
+          atividadePrincipal: `${body.cnaeCodigo} - ${body.cnaeDescricao}`,
+          email: body.email,
+          telefone: body.telefone ?? null,
+          uf: body.uf ?? null,
+        },
+      });
+    } else {
+      // Cliente novo — criar
+      cliente = await prisma.cliente.create({
+        data: {
+          tipoPessoa: body.tipoPessoa,
+          nomeRazaoSocial: body.nomeRazaoSocial,
+          cpfCnpj,
+          atividadePrincipal: `${body.cnaeCodigo} - ${body.cnaeDescricao}`,
+          email: body.email,
+          telefone: body.telefone ?? null,
+          uf: body.uf ?? null,
+        },
+      });
+    }
+
+    // Sempre criar novo lote — permite múltiplos envios
     const lote = await prisma.lote.create({
       data: {
         clienteId: cliente.id,
@@ -48,28 +74,13 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json(
-      {
-        ok: true,
-        cliente,
-        lote,
-      },
+      { ok: true, cliente, lote },
       { status: 201 }
     );
   } catch (error: any) {
     console.error("Erro ao criar cliente e lote:", error);
-
-    if (error?.code === "P2002") {
-      return NextResponse.json(
-        { ok: false, error: "Já existe cliente cadastrado com este CPF/CNPJ." },
-        { status: 400 }
-      );
-    }
-
     return NextResponse.json(
-      {
-        ok: false,
-        error: error?.message || "Erro ao criar cliente e lote",
-      },
+      { ok: false, error: error?.message || "Erro ao criar cliente e lote." },
       { status: 500 }
     );
   }
