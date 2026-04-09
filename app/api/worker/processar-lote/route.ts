@@ -10,7 +10,6 @@ const receiver = new Receiver({
 });
 
 export async function POST(req: NextRequest) {
-  // Verificar assinatura do QStash
   const body = await req.text();
   const signature = req.headers.get("upstash-signature") ?? "";
 
@@ -22,40 +21,49 @@ export async function POST(req: NextRequest) {
 
   const payload = JSON.parse(body) as {
     loteId: string;
-    batchIndex: number;
-    totalBatches: number;
     responsavel: string;
   };
 
-  const { loteId, batchIndex, totalBatches, responsavel } = payload;
+  const { loteId, responsavel } = payload;
 
   try {
-    // Processar o batch específico
-    await gerarParametrizacaoDoLote({
-      loteId,
-      responsavel,
-      batchIndex,
-      totalBatches,
+    // Verificar se já foi processado (evitar duplo processamento)
+    const lote = await prisma.lote.findUnique({
+      where: { id: loteId },
+      select: { statusLote: true, itensCobraveis: true }
     });
 
-    // Se foi o último batch, finalizar e entregar
-    if (batchIndex === totalBatches - 1) {
-      // Aguardar todos os batches gravarem
-      await new Promise((r) => setTimeout(r, 2000));
-
-      const lote = await prisma.lote.findUnique({
-        where: { id: loteId },
-        select: { itensCobraveis: true, itensComRessalva: true }
-      });
-
-      if ((lote?.itensCobraveis ?? 0) > 0) {
-        await finalizarEntregaParametrizacao({ loteId, ignorarPagamento: true });
-      }
+    if (!lote) {
+      return NextResponse.json({ error: "Lote não encontrado." }, { status: 404 });
     }
 
-    return NextResponse.json({ ok: true, batchIndex, totalBatches });
+    if (lote.statusLote !== "PAGAMENTO_APROVADO") {
+      return NextResponse.json({ ok: true, mensagem: "Lote já processado, ignorando." });
+    }
+
+    // Processar o lote completo (motor já usa batch interno de 500)
+    const resultado = await gerarParametrizacaoDoLote({ loteId, responsavel });
+
+    // Finalizar e entregar se houver itens cobráveis
+    let emailEnviado = false;
+    if (resultado.totalFechados + resultado.totalRessalva > 0) {
+      const entrega = await finalizarEntregaParametrizacao({
+        loteId,
+        ignorarPagamento: true,
+      });
+      emailEnviado = entrega.emailEnviado;
+    }
+
+    return NextResponse.json({
+      ok: true,
+      protocolo: resultado.protocolo,
+      fechados: resultado.totalFechados,
+      ressalva: resultado.totalRessalva,
+      revisar: resultado.totalRevisar,
+      emailEnviado,
+    });
   } catch (error) {
-    console.error(`Erro no batch ${batchIndex}:`, error);
+    console.error("Erro no worker QStash:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Erro no worker" },
       { status: 500 }
