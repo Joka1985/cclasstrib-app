@@ -1,3 +1,4 @@
+export const maxDuration = 300; // 5 minutos (requer Vercel Pro)
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { gerarParametrizacaoDoLote } from "@/lib/parametrizacao-engine";
