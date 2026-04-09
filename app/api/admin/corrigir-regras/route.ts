@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { gerarParametrizacaoDoLote } from "@/lib/parametrizacao-engine";
+import { finalizarEntregaParametrizacao } from "@/lib/finalizar-entrega-parametrizacao";
 
 export async function POST(req: NextRequest) {
   const auth = req.headers.get("authorization");
@@ -7,7 +9,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
   }
 
-  // Buscar bases publicadas
+  const body = await req.json().catch(() => ({}));
+  const loteId = body.loteId as string | undefined;
+  const cpfCnpj = body.cpfCnpj as string | undefined;
+
+  // ── Corrigir regras ──────────────────────────────────────────────────────
   const bases = await prisma.baseOficialClassificacao.findMany({
     where: { versaoNormativa: { publicada: true, fonteNormativa: { tipoFonte: "CCLASSTRIB_OFICIAL" } } },
     select: { id: true, cclassTrib: true }
@@ -15,60 +21,45 @@ export async function POST(req: NextRequest) {
   const mapaBase: Record<string, string> = {};
   bases.forEach(b => { mapaBase[b.cclassTrib] = b.id; });
 
-  // Mapeamento de cClassTrib errados para corretos
-  const mapa: Record<string, string> = {
-    "210001": "200034",
-    "210002": "200035",
-    "210003": "200038",
-  };
-
-  // Corrigir regras sem base
+  const mapa: Record<string, string> = { "210001": "200034", "210002": "200035", "210003": "200038" };
   const semBase = await prisma.regraAnexoContextual.findMany({
     where: { ativa: true, baseOficialClassificacaoId: null },
-    select: { id: true, cClassTrib: true, anexo: true }
+    select: { id: true, cClassTrib: true }
   });
-
-  const corrigidas: string[] = [];
   for (const r of semBase) {
     const cc = mapa[r.cClassTrib] ?? r.cClassTrib;
     const baseId = mapaBase[cc];
-    if (baseId) {
-      await prisma.regraAnexoContextual.update({
-        where: { id: r.id },
-        data: { cClassTrib: cc, baseOficialClassificacaoId: baseId }
-      });
-      corrigidas.push(`${r.anexo}:${r.cClassTrib}->${cc}`);
-    }
+    if (baseId) await prisma.regraAnexoContextual.update({ where: { id: r.id }, data: { cClassTrib: cc, baseOficialClassificacaoId: baseId } });
   }
 
-  // Corrigir regras com cClassTrib errado
-  for (const [errado, correto] of Object.entries(mapa)) {
-    const erradas = await prisma.regraAnexoContextual.findMany({
-      where: { ativa: true, cClassTrib: errado },
-      select: { id: true }
+  // ── Reprocessar lote específico ou todos os lotes com 0 cobráveis ────────
+  const where: Record<string, unknown> = { itensCobraveis: 0, quantidadeLinhasValidas: { gt: 0 } };
+  if (loteId) {
+    // Processar lote específico
+    const lote = await prisma.lote.findUnique({ where: { id: loteId }, select: { id: true, protocolo: true } });
+    if (!lote) return NextResponse.json({ error: "Lote não encontrado." }, { status: 404 });
+
+    await prisma.resultadoParametrizacao.deleteMany({ where: { loteId } });
+    await prisma.filaRevisaoTributaria.deleteMany({ where: { loteId } });
+    await prisma.lote.update({ where: { id: loteId }, data: { itensCobraveis: 0, itensComRessalva: 0, itensImprecisos: 0, statusLote: "PAGAMENTO_APROVADO" } });
+
+    const param = await gerarParametrizacaoDoLote({ loteId, responsavel: "Equipe cClassTrib" });
+
+    let emailEnviado = false;
+    if (param.totalFechados + param.totalRessalva > 0) {
+      const entrega = await finalizarEntregaParametrizacao({ loteId, ignorarPagamento: true });
+      emailEnviado = entrega.emailEnviado;
+    }
+
+    return NextResponse.json({
+      ok: true,
+      protocolo: lote.protocolo,
+      fechados: param.totalFechados,
+      ressalva: param.totalRessalva,
+      revisar: param.totalRevisar,
+      emailEnviado,
     });
-    const baseId = mapaBase[correto];
-    if (baseId) {
-      for (const r of erradas) {
-        await prisma.regraAnexoContextual.update({
-          where: { id: r.id },
-          data: { cClassTrib: correto, baseOficialClassificacaoId: baseId }
-        });
-        corrigidas.push(`${errado}->${correto}`);
-      }
-    }
   }
 
-  // Verificar resultado
-  const semBaseApos = await prisma.regraAnexoContextual.count({
-    where: { ativa: true, baseOficialClassificacaoId: null }
-  });
-
-  return NextResponse.json({
-    ok: true,
-    basesDisponiveis: Object.keys(mapaBase).length,
-    corrigidas,
-    totalCorrigidas: corrigidas.length,
-    semBaseAindaPendentes: semBaseApos,
-  });
+  return NextResponse.json({ ok: true, mensagem: "Use loteId para reprocessar um lote específico.", basesDisponiveis: Object.keys(mapaBase).length });
 }
