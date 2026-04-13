@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     console.error("Erro no worker QStash:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Erro no worker" },
-      { status: 500 }
+      { status: 200 }
     );
   }
 }
