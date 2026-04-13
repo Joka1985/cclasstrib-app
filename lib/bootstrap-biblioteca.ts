@@ -805,7 +805,7 @@ export async function bootstrapBibliotecaCClassTrib() {
     baseOficialClassificacao,
     ncmAnexosVigentes,
   ] = await Promise.all([
-    prisma.fonteNormativa.count(),
+    Promise.resolve(0), // fonteNormativa ignorada
     prisma.destinatarioAlerta.count(),
     prisma.operacaoFiscal.count(),
     prisma.regraExcecaoTributaria.count(),
@@ -841,7 +841,7 @@ export async function precisaBootstrapBiblioteca() {
     versoesNormativasPublicadas,
     baseOficialClassificacao,
   ] = await Promise.all([
-    prisma.fonteNormativa.count(),
+    Promise.resolve(0), // fonteNormativa ignorada
     prisma.operacaoFiscal.count(),
     prisma.regraExcecaoTributaria.count(),
     prisma.regraAnexoContextual.count(),
