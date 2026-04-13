@@ -1381,3 +1381,151 @@ export async function gerarParametrizacaoDoLote(params: {
     totalRevisar,
   };
 }
+// Processamento de um batch específico — chamado pelo worker QStash
+export async function processarBatchDoLote(params: {
+  loteId: string;
+  batchIndex: number;
+  batchSize: number;
+  responsavel: string;
+}) {
+  const { loteId, batchIndex, batchSize, responsavel } = params;
+  const offset = batchIndex * batchSize;
+
+  // Carregar APENAS os itens deste batch
+  const itensBatch = await prisma.itemPlanilha.findMany({
+    where: { loteId, linhaValida: true },
+    orderBy: { linhaOrigem: "asc" },
+    skip: offset,
+    take: batchSize,
+  });
+
+  if (!itensBatch.length) return { ok: true, processados: 0 };
+
+  // Carregar dados de suporte uma única vez
+  const [lote, operacoesFiscais, regrasAnexo] = await Promise.all([
+    prisma.lote.findUnique({
+      where: { id: loteId },
+      include: {
+        cliente: true,
+        xmlDocumentos: { where: { statusXml: { in: ["SAIDA", "ENTRADA"] } }, include: { itensXml: true } },
+        resultadosProcessamento: true,
+        evidenciasOperacao: true,
+      }
+    }),
+    prisma.operacaoFiscal.findMany({ where: { ativa: true } }),
+    prisma.regraAnexoContextual.findMany({
+      where: { ativa: true },
+      include: { baseOficialClassificacao: { include: { versaoNormativa: { include: { fonteNormativa: true } } } } }
+    }),
+  ]);
+
+  if (!lote) return { ok: false, erro: "Lote não encontrado" };
+
+  // Processar os itens do batch usando a lógica existente
+  const itensXmlRelacionaveis = montarItensXmlRelacionaveis(
+    lote.xmlDocumentos.flatMap(doc =>
+      doc.itensXml.map(item => ({
+        ...item,
+        xmlDocumento: {
+          id: doc.id,
+          destinatarioCpfCnpj: doc.destinatarioCpfCnpj,
+          destinatarioNome: doc.destinatarioNome,
+          emitenteNome: doc.emitenteNome,
+          statusXml: doc.statusXml,
+        },
+      }))
+    ),
+  );
+
+  const chavesJaGeradas = new Set<string>();
+  let processados = 0;
+
+  for (const item of itensBatch) {
+    const resultadoProcessado = lote.resultadosProcessamento.find(r => r.itemPlanilhaId === item.id) ?? null;
+    const itensXmlDoProduto = obterItensXmlRelacionados({
+      codigoItemOuServico: item.codigoItemOuServico,
+      descricaoItemOuServico: item.descricaoItemOuServico,
+      itensXml: itensXmlRelacionaveis,
+    });
+    const primeiroItemXml = itensXmlDoProduto[0] ?? null;
+    const evidenciasDoItem = lote.evidenciasOperacao.filter(
+      e => e.itemPlanilhaId === item.id || (primeiroItemXml?.id && e.itemXmlId === primeiroItemXml.id)
+    );
+    const ncmEfetivo = resolverNcmEfetivo({
+      ncmProcessado: resultadoProcessado?.ncmFinal,
+      ncmPlanilha: item.ncm,
+      itensXmlRelacionados: itensXmlDoProduto,
+    });
+    const cfopsEfetivos = coletarCfopsEfetivos({
+      cfopProcessado: resultadoProcessado?.cfopFinal,
+      cfopManual: item.cfopInformadoManual,
+      itensXmlRelacionados: itensXmlDoProduto,
+    });
+    if (!cfopsEfetivos.length) cfopsEfetivos.push("");
+
+    for (const cfopIterado of cfopsEfetivos) {
+      const cfopEfetivo = normalizarCfop(cfopIterado);
+      const classificacaoOperacao = await resolverOperacaoViaBanco({
+        cfop: cfopEfetivo,
+        descricao: item.descricaoItemOuServico,
+        clienteCpfCnpj: lote.cliente.cpfCnpj,
+        destinatarioCpfCnpj: primeiroItemXml?.xmlDocumento.destinatarioCpfCnpj ?? null,
+        destinatarioNome: primeiroItemXml?.xmlDocumento.destinatarioNome ?? null,
+        operacoesFiscais,
+        evidencias: evidenciasDoItem,
+      });
+      const motor = await resolverClassificacaoViaBanco({
+        loteId, itemPlanilhaId: item.id, itemXmlId: primeiroItemXml?.id ?? null,
+        clienteId: lote.cliente.id, atividadePrincipalCliente: lote.cliente.atividadePrincipal,
+        ncm: ncmEfetivo, cfop: cfopEfetivo, descricao: item.descricaoItemOuServico,
+        classificacaoOperacao, evidencias: evidenciasDoItem,
+        possuiRelacaoXml: itensXmlDoProduto.length > 0,
+        descricaoDivergente: Boolean(resultadoProcessado?.descricaoDivergente),
+        ncmDivergente: Boolean(resultadoProcessado?.ncmDivergente),
+      });
+      const chaveResultado = montarChaveUnicaResultado({
+        itemPlanilhaId: item.id, ncm: ncmEfetivo, cfop: cfopEfetivo,
+        cst: motor.classificacao?.cst ?? null, cclassTrib: motor.classificacao?.cclassTrib ?? null,
+      });
+      if (chavesJaGeradas.has(chaveResultado)) continue;
+      chavesJaGeradas.add(chaveResultado);
+
+      if (!motor.classificado || !motor.classificacao) {
+        await prisma.filaRevisaoTributaria.create({
+          data: {
+            loteId, itemPlanilhaId: item.id,
+            operacaoFiscalId: classificacaoOperacao.operacaoFiscalId,
+            motivoRevisao: motor.motivoRevisao ?? "Caso sem fechamento automático.",
+            tipoAmbiguidade: motor.tipoAmbiguidade ?? "SEM_REGRA_VENCEDORA",
+            dadosFaltantes: !ncmEfetivo && !cfopEfetivo ? "NCM efetivo; CFOP efetivo" : !ncmEfetivo ? "NCM efetivo" : !cfopEfetivo ? "CFOP efetivo" : null,
+            sugestaoMotor: motor.sugestaoMotor ?? classificacaoOperacao.codigoOperacao,
+            responsavel,
+          },
+        });
+      } else {
+        await prisma.resultadoParametrizacao.create({
+          data: {
+            loteId, clienteId: lote.cliente.id, itemPlanilhaId: item.id,
+            itemXmlId: primeiroItemXml?.id ?? null,
+            operacaoFiscalId: classificacaoOperacao.operacaoFiscalId,
+            baseOficialClassificacaoId: motor.baseOficialClassificacaoId,
+            codProduto: item.codigoItemOuServico, descricao: item.descricaoItemOuServico,
+            ncm: ncmEfetivo, cfop: cfopEfetivo,
+            cst: motor.classificacao.cst, cclassTrib: motor.classificacao.cclassTrib,
+            descCclassTrib: motor.classificacao.descCclassTrib,
+            tipoAliquota: motor.classificacao.tipoAliquota,
+            pRedIbs: motor.classificacao.pRedIbs, pRedCbs: motor.classificacao.pRedCbs,
+            artigoLc214: motor.classificacao.artigoLc214,
+            observacoes: motor.observacoes, responsavel,
+            dataReferencia: new Date(), statusDecisao: motor.statusDecisao,
+            abaDestino: "PARAMETRIZACAO_FINAL", fundamento: motor.fundamento,
+            acaoProgramador: motor.acaoProgramador,
+          },
+        });
+      }
+      processados++;
+    }
+  }
+
+  return { ok: true, processados };
+}
