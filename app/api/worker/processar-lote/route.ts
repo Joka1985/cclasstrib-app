@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Receiver } from "@upstash/qstash";
 import { prisma } from "@/lib/prisma";
-import { processarBatchDoLote } from "@/lib/parametrizacao-engine";
+import { gerarParametrizacaoDoLote } from "@/lib/parametrizacao-engine";
 import { finalizarEntregaParametrizacao } from "@/lib/finalizar-entrega-parametrizacao";
 
 const receiver = new Receiver({
@@ -29,20 +29,24 @@ export async function POST(req: NextRequest) {
   const { loteId, batchIndex, totalBatches, responsavel } = payload;
 
   try {
-    // Verificar se lote existe
     const lote = await prisma.lote.findUnique({
       where: { id: loteId },
-      select: { dataEntregaEnviada: true, itensCobraveis: true }
+      select: { dataEntregaEnviada: true }
     });
     if (!lote) return NextResponse.json({ ok: false, mensagem: "Lote não encontrado." }, { status: 200 });
     if (lote.dataEntregaEnviada) return NextResponse.json({ ok: true, mensagem: "Já entregue." }, { status: 200 });
 
-    // Processar batch
-    const resultado = await processarBatchDoLote({ loteId, batchIndex, batchSize: BATCH_SIZE, responsavel });
+    // Processar apenas o batch deste índice usando skip/take
+    await gerarParametrizacaoDoLote({
+      loteId,
+      responsavel,
+      skip: batchIndex * BATCH_SIZE,
+      take: BATCH_SIZE,
+    });
 
     // Se é o último batch — recontar e entregar
     if (batchIndex === totalBatches - 1) {
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 3000));
 
       const fechados = await prisma.resultadoParametrizacao.count({
         where: { loteId, statusDecisao: "FECHADO", abaDestino: "PARAMETRIZACAO_FINAL" }
@@ -67,7 +71,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true, batchIndex, processados: resultado.processados }, { status: 200 });
+    return NextResponse.json({ ok: true, batchIndex, totalBatches }, { status: 200 });
   } catch (error) {
     console.error(`Erro worker batch ${batchIndex}:`, error);
     return NextResponse.json({ ok: false, erro: error instanceof Error ? error.message : "Erro" }, { status: 200 });
